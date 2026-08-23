@@ -306,8 +306,13 @@ function refreshClock(){
   if(day<0 || (was!==todayIdx && day===was)) day=todayIdx;  // start a přepnutí přes půlnoc
   return sameDay ? null : 'stale';
 }
+// Nastavení se ukládá jen do prohlížeče. Do adresy se nezapisuje schválně —
+// ikona na ploše by si jinak navždy pamatovala hodnoty z chvíle, kdy ji uložíš.
 function readHash(){
-  const o={}; if(!location.hash) return o;
+  const o={};
+  if(!location.hash) return o;
+  // jednorázově přeber staré hodnoty z adresy, pokud v prohlížeči ještě nic není
+  if(store.get('fve-cfg')) return o;
   new URLSearchParams(location.hash.slice(1)).forEach((v,k)=>{
     if(k in DEF) o[k]=parseFloat(v);
     if(k==='cal' && !calLog.length) calLog=v.split('|').filter(Boolean).map(e=>{
@@ -317,11 +322,6 @@ function readHash(){
   return o;
 }
 function writeHash(){
-  const p=new URLSearchParams();
-  Object.keys(DEF).forEach(k=>p.set(k,cfg[k]));
-  if(calLog.length) p.set('cal',calLog.slice(-14)
-    .map(e=>`${e.d}~${e.r.toFixed(1)}~${e.m100.toFixed(1)}`).join('|'));
-  history.replaceState(null,'','#'+p.toString());
   store.set('fve-cal',JSON.stringify(calLog));
   store.set('fve-cfg',JSON.stringify(cfg));
   store.set('fve-stateAt',stateAt.toISOString());
@@ -1123,7 +1123,10 @@ function initNow(){
   document.getElementById('nowMsg').textContent=
     'Dnešek se počítá od '+String(nowH).padStart(2,'0')+':00. Po úpravě hodnot dej Přepočítat vše.';
 }
-buildForm(); initNow(); writeHash(); load();
+buildForm(); initNow(); writeHash();
+// zahoď staré nastavení z adresy, ať se příště nevrací
+if(location.hash){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){} }
+load();
 
 // stránka může viset otevřená přes noc — každou minutu zkontroluj datum a hodinu
 setInterval(()=>{ if(data && refreshClock()!=='reload') render(); },60000);
