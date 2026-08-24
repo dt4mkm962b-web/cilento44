@@ -100,8 +100,10 @@
   table.opts td .net{display:block;font-weight:600;font-size:14px}
   table.opts td .dd{display:block;font-size:10.5px;color:var(--muted);line-height:1.35;margin-top:2px}
   table.opts button.daydone{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
-    letter-spacing:.06em;font-size:10.5px;padding:3px 6px;border:1px solid var(--hair);
-    background:#fff;border-radius:2px;cursor:pointer;color:var(--muted);display:block;width:100%}
+    letter-spacing:.07em;font-size:10.5px;font-weight:600;padding:4px 8px;border-radius:999px;
+    cursor:pointer;display:block;width:100%;margin-top:5px;border:1px solid}
+  table.opts button.daydone.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
+  table.opts button.daydone.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
   table.opts button.calDel{background:none;border:none;color:var(--muted);cursor:pointer;
     font-size:14px;padding:2px 6px;line-height:1}
   table.opts button.calDel:hover{color:var(--surplus)}
@@ -714,8 +716,8 @@ function weekTable(wk){
     return `<tr${sel?' class="pick"':''}>
       <td><button class="dayjump" data-d="${todayIdx+i}">${cell(s.date,i)}</button></td>
       <td><input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" style="width:58px;padding:4px 5px">
-        ${(todayIdx+i)===todayIdx && s.km>0
-          ? `<button class="daydone" data-key="${s.date}" style="margin-top:4px">${
+        ${(todayIdx+i)===todayIdx && (s.km>0 || s.driven)
+          ? `<button class="daydone ${s.driven?'done':'todo'}" data-key="${s.date}">${
               s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}</td>
       <td><select class="dayback" data-key="${s.date}" style="width:118px;padding:4px 5px;font-size:12px${
   s.back>=24?';color:var(--surplus);font-weight:600':''}">${
@@ -769,7 +771,8 @@ function weekTable(wk){
     <p style="font-size:12px;color:var(--muted);margin:8px 0 0">
       U každého dne zadej kilometry a od kolika je auto doma. Před návratem se nenabíjí — a když
       auto chybí celý den, baterie domu vyjede na 100 %, takže další ráno může nabíjení začít dřív.
-      Stav auta i baterie se řetězí ze dne na den.</p>${hint}
+      Stav auta i baterie se řetězí ze dne na den. U dneška přepni <em>ještě pojedu</em> na
+      <em>ujeto</em>, jakmile cestu máš za sebou — kilometry se z plánu odečtou.</p>${hint}
     ${advice}
   </div>`;
 }
@@ -1039,7 +1042,11 @@ function wire(s){
     dayCfg(el.dataset.key).km=parseFloat(el.value)||0; saveDays(); render();
   }));
   document.querySelectorAll('.daydone').forEach(el=>el.onclick=()=>{
-    const c=dayCfg(el.dataset.key); c.done=!c.done; saveDays(); render();
+    const c=dayCfg(el.dataset.key);
+    c.done=!c.done;
+    if(c.done){ c.kmDone=c.km||c.kmDone||0; c.km=0; }        // ujeto → km pryč z plánu
+    else { c.km=c.kmDone||c.km||0; c.kmDone=0; }             // zpět → vrať je
+    saveDays(); render();
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
