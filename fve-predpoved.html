@@ -104,6 +104,16 @@
     cursor:pointer;display:block;width:100%;margin-top:5px;border:1px solid}
   table.opts button.daydone.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
   table.opts button.daydone.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
+  table.opts .trips{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+  table.opts button.daytrip{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
+    letter-spacing:.05em;font-size:10px;font-weight:600;padding:3px 6px;border-radius:2px;
+    cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--muted);flex:1 1 auto}
+  table.opts button.daytrip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+  table.opts button.daywork{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
+    letter-spacing:.07em;font-size:10.5px;font-weight:600;padding:4px 8px;border-radius:999px;
+    cursor:pointer;display:block;width:100%;margin-top:4px;border:1px dashed var(--hair);
+    background:#fff;color:var(--muted)}
+  table.opts button.daywork.on{background:#EEE7F5;border:1px solid var(--draw);color:var(--draw)}
   table.opts button.calDel{background:none;border:none;color:var(--muted);cursor:pointer;
     font-size:14px;padding:2px 6px;line-height:1}
   table.opts button.calDel:hover{color:var(--surplus)}
@@ -214,7 +224,7 @@ const DEF = {
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
   loadDay:12, loadBase:0.35,
   evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, charging:0,
-  tripKm:0, tripArrive:15, tripCons:17, roadSoc:0, roadKm:0
+  tripKm:0, tripArrive:15, tripCons:17, workTarget:80, workSplit:50, roadSoc:0, roadKm:0
 };
 const FIELDS = [
   ['h','Panely — string A (východ, 11 ks)'],
@@ -245,6 +255,7 @@ const FIELDS = [
   ['evTarget','Strop nabíjení auta (%)','number','5'],
   ['evEff','Účinnost nabíjení auta (%)','number','1'],
   ['tripArrive','Minimum v autě po příjezdu (%)','number','5'],
+  ['workSplit','Podíl km do práce (%)','number','5'],
   ['evPhases','Počet fází','number','1'],
   ['evFrom','Nabíjet nejdřív od (h)','number','1'],
   ['evTo','Nabíjet nejpozději do (h)','number','1'],
@@ -294,7 +305,18 @@ function calSuggest(){
 const savedCfg = (()=>{ try{ const v=JSON.parse(store.get('fve-cfg')||'{}');
   return (v&&typeof v==='object')?v:{}; }catch(e){ return {}; } })();
 let cfg = {...DEF, ...savedCfg, ...readHash()};
-Object.keys(cfg).forEach(k=>{ if(!(k in DEF) || !isFinite(cfg[k])) cfg[k]=DEF[k]; });
+// meze, aby překlep v nastavení nerozbil celý výpočet
+const LIMITS={evCap:[5,200],battCap:[1,100],tripCons:[5,60],evPhases:[1,3],inv:[1,50],
+  calib:[20,300],evEff:[50,100],reserve:[0,95],dayFloor:[0,95],battMin:[0,50],battMax:[50,100],
+  battChg:[0.5,30],battDis:[0.5,30],akWp:[0,50],bkWp:[0,50],loss:[0,50],evTarget:[10,100],
+  evCap2:[0,0]};
+function sanitize(){
+  Object.keys(cfg).forEach(k=>{ if(!(k in DEF) || !isFinite(cfg[k])) cfg[k]=DEF[k]; });
+  Object.entries(LIMITS).forEach(([k,[lo,hi]])=>{
+    if(k in cfg) cfg[k]=Math.max(lo,Math.min(hi,cfg[k]));
+  });
+}
+sanitize();
 let data = null, day = -1, todayIdx = 0;
 let nowH = new Date().getHours();
 let nowFrac = 0;                   // aktuální čas v hodinách, zaokrouhlený na příští čtvrthodinu
@@ -373,6 +395,7 @@ function apply(force){
     const el=document.getElementById(k);
     if(el && el.value!=='') cfg[k]=parseFloat(el.value);
   });
+  sanitize();
   writeHash();
   const msg=document.getElementById('applyMsg');
   const geoChanged = ['lat','lon','aTilt','aAz','bTilt','bAz'].some(k=>old[k]!==cfg[k]);
@@ -474,7 +497,7 @@ function simulate(d,st){
   const roomCap=Math.max(0,cfg.evTarget/100*cfg.evCap-evNow);   // kolik se do auta vejde
   const room=canCharge?roomCap:0;                                // kolik z toho lze dnes nabít
 
-  function run(amps,from,to){
+  function run(amps,from,to,mid){
     const kW=amps*cfg.evPhases*0.23;
     let soc=startSoc,ev=0,grid=0,exp=0,fullAt=null,socEve=null,end=null,minSoc=startSoc;
     let toHouse=0,toCar=0,toBatt=0,carFromBatt=0;
@@ -485,7 +508,7 @@ function simulate(d,st){
       // evP = co odebere nabíječka, ev = co skutečně přiteče do baterie auta
       if(amps>0 && x.h>=Math.max(from,evOpen) && x.h<to && ev<room-0.01)
         evP=Math.min(kW*w,(room-ev)/effEv);
-      const pv=x.pvLo*w, ld=x.load*w;
+      const pv=(mid?x.pv:x.pvLo)*w, ld=x.load*w;
       const net=pv-ld-evP;
       let g=0,e=0;
       // kam teče výroba: nejdřív dům, pak auto, pak baterie, zbytek do sítě
@@ -507,10 +530,14 @@ function simulate(d,st){
             evPct:(evNow+ev)/cfg.evCap*100,start:from,end,kW,amps};
   }
 
-  // hledej okno, které nejvíc nabije auto BEZ nákupu ze sítě a s dodrženou večerní rezervou
+  // hledej okno, které nejvíc nabije auto BEZ nákupu ze sítě navíc a s dodrženou večerní rezervou
   const base=run(0,99,99);
   const from0=evOpen;
-  const ok=r=>!(r.grid>0.3 || r.socEvePct<cfg.reserve-0.5 || r.minSocPct<floorPct-0.5);
+  // nabíjení nesmí zhoršit to, co by se dělo i bez něj — na chmurném dni dům ze sítě bere tak jako tak
+  const baseGrid=base.grid, baseEve=base.socEvePct;
+  const ok=r=>!(r.grid>baseGrid+0.3
+             || r.socEvePct<Math.min(cfg.reserve,baseEve)-0.5
+             || r.minSocPct<floorPct-0.5);
   const startAt = !today ? null
     : (st.charging ? h0
       : null);
@@ -536,6 +563,9 @@ function simulate(d,st){
   const manual = (st.charging && canCharge)
     ? (opts.find(o=>o.amps===cfg.evAmps) || null) : null;
   const use = manual || rec;
+  // toky pro zobrazení: stejná řada, z jaké je velké číslo nahoře
+  const flow = (use && use.evDone>0.3)
+    ? run(use.amps,use.start,use.end,true) : run(0,99,99,true);
 
   // kdyby se začalo hned teď se stejným proudem a stejnou délkou — co by se pokazilo?
   let whyLater=null;
@@ -561,7 +591,7 @@ function simulate(d,st){
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
   return {hours:base.hours,loadDay,learned:!!ll,total,totalLo,totalHi,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
-          imported:base.grid,base,opts,rec,manual,use,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
+          imported:base.grid,base,opts,rec,manual,use,flow,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
           date:dateStr,daily:{code:data.daily.weather_code[d],tmax:data.daily.temperature_2m_max[d],
           tmin:data.daily.temperature_2m_min[d],sun:data.daily.sunshine_duration[d]/3600,
           light:data.daily.daylight_duration[d]/3600,
@@ -583,9 +613,26 @@ function week(){
     s.driven = (d!==todayIdx) ? false
       : (dc.done!==undefined ? !!dc.done : nowH>=doneBy);
     s.drive = s.driven ? 0 : dc.km*cfg.tripCons/100;
+    s.workTo = dc.workTo||0;
+    s.work = s.workTo>0 && s.drive>0;
     s.evStartPct=ev/cfg.evCap*100;
-    const evEnd=ev+s.use.evDone-s.drive;
+    let evEnd, low;
+    if(s.work){
+      const leg1=s.drive*Math.max(0,Math.min(100,cfg.workSplit))/100;
+      const leg2=s.drive-leg1;
+      const atWork=ev-leg1;                                   // nejhorší bod dne
+      const target=s.workTo/100*cfg.evCap;
+      const afterWork=Math.max(atWork,Math.min(target,cfg.evCap));
+      s.workAdd=Math.max(0,afterWork-atWork);
+      s.atWorkPct=atWork/cfg.evCap*100;
+      evEnd=afterWork-leg2+s.use.evDone;
+      low=Math.min(atWork,evEnd);
+    } else {
+      evEnd=ev+s.use.evDone-s.drive;
+      low=evEnd;
+    }
     s.evEndKWh=evEnd; s.evEndPct=evEnd/cfg.evCap*100;
+    s.lowPct=low/cfg.evCap*100;
     const needKWh=cfg.tripArrive/100*cfg.evCap;
     s.short=Math.max(0,needKWh-evEnd);
     batt=s.use.endBatt;
@@ -669,7 +716,7 @@ function report(s){
   L.push(`Výroba za den ${f1(s.total)} kWh (rozptyl modelů ${f1(s.totalLo)}–${f1(s.totalHi)})${
     s.today&&s.h0>0?` · od teď ještě ${f1(s.rest)} kWh`:''}`);
   L.push(`Špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW · nad 3 kW ${s.above3} h`);
-  if(s.today) L.push(`Z toho do auta ${f1(s.use.toCar)}, do baterie ${f1(s.use.toBatt)}, dům ${f1(s.use.toHouse)}, síť ${f1(s.use.exp)} kWh`);
+  if(s.today) L.push(`Z toho do auta ${f1(s.flow.toCar)}, do baterie ${f1(s.flow.toBatt)}, dům ${f1(s.flow.toHouse)}, síť ${f1(s.flow.exp)} kWh`);
   L.push(s.fullAt!==null ? `Baterie 100 % ~${hh(s.fullAt)}, bez auta by přeteklo ${f1(s.surplus)} kWh`
                          : `Baterie se dnes na 100 % nedostane`);
   L.push('');
@@ -700,6 +747,8 @@ function ntWindow(dateStr){
   return {start,end,hours:(24-start)+end,den};
 }
 
+// časté cesty — km a jestli se u nich dobíjí v půlce
+const TRIPS=[['Praha',190,80],['Tchýně',50,0],['Tábor',20,0],['Morava',500,100]];
 const BACK=[[0,'doma celý den'],[10,'doma od 10:00'],[12,'doma od 12:00'],[14,'doma od 14:00'],
   [15,'doma od 15:00'],[16,'doma od 16:00'],[17,'doma od 17:00'],[18,'doma od 18:00'],
   [19,'doma od 19:00'],[24,'PRYČ celý den']];
@@ -716,9 +765,15 @@ function weekTable(wk){
     return `<tr${sel?' class="pick"':''}>
       <td><button class="dayjump" data-d="${todayIdx+i}">${cell(s.date,i)}</button></td>
       <td><input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" style="width:58px;padding:4px 5px">
+        <div class="trips">${TRIPS.map(t=>
+          `<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}" data-km="${t[1]}"
+            data-work="${t[2]}">${t[0]}</button>`).join('')}</div>
         ${(todayIdx+i)===todayIdx && (s.km>0 || s.driven)
           ? `<button class="daydone ${s.driven?'done':'todo'}" data-key="${s.date}">${
-              s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}</td>
+              s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}
+        ${s.km>0 && !s.driven
+          ? `<button class="daywork ${s.work?'on':''}" data-key="${s.date}">${
+              s.work?'⚡ práce '+f0(s.workTo)+' %':'bez dobití'}</button>`:''}</td>
       <td><select class="dayback" data-key="${s.date}" style="width:118px;padding:4px 5px;font-size:12px${
   s.back>=24?';color:var(--surplus);font-weight:600':''}">${
         BACK.map(o=>`<option value="${o[0]}"${o[0]===s.back?' selected':''}>${o[1]}</option>`).join('')
@@ -732,6 +787,8 @@ function weekTable(wk){
           : `<span class="net" style="color:${net>0?'var(--batt)':'var(--surplus)'}">${
              net>0?'+':'−'}${f1(Math.abs(net))}</span>`;
         const parts=[];
+        if(s.work && s.workAdd>0.1) parts.push(
+          `<span style="color:var(--draw)">+${f1(s.workAdd)} v práci</span>`);
         if(chg>0.1) parts.push(`<span style="color:var(--batt)">+${f1(chg)} nabito</span>`);
         if(drv>0.1) parts.push(`<span style="color:var(--surplus)">−${f1(drv)} ujeto</span>`);
         if(!parts.length && why) parts.push(why);
@@ -739,7 +796,8 @@ function weekTable(wk){
         if(s.driven) parts.push('km už za tebou');
         return big+`<span class="dd">${parts.join('<br>')}</span>`;
       })()}</td>
-      <td ${evCls}>${f0(s.evEndPct)} %</td>
+      <td ${evCls}>${f0(s.evEndPct)} %${s.work
+        ?`<span class="dd">v práci ${f0(s.atWorkPct)} %</span>`:''}</td>
       <td>${f0(s.use.socEvePct)} %</td></tr>`;
   }).join('');
 
@@ -772,7 +830,9 @@ function weekTable(wk){
       U každého dne zadej kilometry a od kolika je auto doma. Před návratem se nenabíjí — a když
       auto chybí celý den, baterie domu vyjede na 100 %, takže další ráno může nabíjení začít dřív.
       Stav auta i baterie se řetězí ze dne na den. U dneška přepni <em>ještě pojedu</em> na
-      <em>ujeto</em>, jakmile cestu máš za sebou — kilometry se z plánu odečtou.</p>${hint}
+      <em>ujeto</em>, jakmile cestu máš za sebou — kilometry se z plánu odečtou.
+      Placka <em>bez dobití</em> cykluje na 80 a 100 %, když můžeš dobít v půlce cesty.
+      Tlačítka s názvy cest vyplní kilometry i dobíjení naráz; druhým ťuknutím cestu zrušíš.</p>${hint}
     ${advice}
   </div>`;
 }
@@ -897,24 +957,27 @@ function render(){
     else{
       const km=horizon.reduce((a,x)=>a+x.km,0);
       const kwh=km*cfg.tripCons/100;
-      const arrive=cfg.evSoc-kwh/cfg.evCap*100;          // bez rezervy
-      const col = arrive<0?'var(--surplus)':(arrive<cfg.tripArrive?'var(--surplus)':'var(--batt)');
-      const kdy = horizon.length>1 ? 'dnešních a zítřejších'
-        : (wk.indexOf(horizon[0])===0 ? 'dnešních' : 'zítřejších');
-      // totéž, ale s naplánovaným domácím nabíjením
-      const withChg = wk[Math.min(1,wk.length-1)].evEndPct;
+      // nejnižší bod, kam auto klesne — u dnů s dobitím v práci je to příjezd do práce
+      const low=Math.min(...horizon.map(x=>x.lowPct));
+      const anyWork=horizon.some(x=>x.work);
+      const worst=horizon.find(x=>Math.abs(x.lowPct-low)<0.01);
+      const kde=(worst&&worst.work&&Math.abs(worst.atWorkPct-low)<0.01)?'při příjezdu do práce':'po návratu domů';
+      const col = low<cfg.tripArrive?'var(--surplus)':'var(--batt)';
+      const kdy = horizon.length>1 ? 'dnes a zítra tě čeká'
+        : (wk.indexOf(horizon[0])===0 ? 'dnes tě čeká' : 'zítra tě čeká');
       ti.innerHTML=`<div style="border-left:3px solid ${col};padding:8px 11px;background:#fff;border-radius:2px">
         <span style="font-family:var(--mono);font-size:22px;font-weight:600;color:${col}">${
-          arrive<0?'—':f0(arrive)+' %'}</span>
-        <span style="font-size:13px"> ${arrive<0?'nedojedeš':'ti zbyde'} po ${kdy} ${f0(km)} km${
+          low<0?'—':f0(low)+' %'}</span>
+        <span style="font-size:13px"> ${low<0?'nedojedeš':'nejníž se dostaneš '+kde} · ${kdy} ${f0(km)} km${
           horizon.length>1?' ('+horizon.map(x=>f0(x.km)).join(' + ')+')':''}</span>
         <div style="font-size:12px;color:var(--muted);margin-top:3px">
           Máš ${f0(cfg.evSoc)} %, cesta spotřebuje ${f1(kwh)} kWh${
-            arrive<0?` — chybí ${f1(-arrive/100*cfg.evCap)} kWh, <strong style="color:var(--surplus)">budeš muset dobít po cestě</strong> (zadej to níž).`
-            :(arrive<3?` — to je skoro na nulu, <strong style="color:var(--surplus)">počítej s dobitím po cestě</strong> (zadej to níž).`
-            :(arrive<cfg.tripArrive?` — dojedeš, ale s malou rezervou.`:'.'))}
-          ${horizon.length>1||wk[0].use.evDone>0.3?`<br>S dnešním nabíjením ti po poslední cestě zbyde
-            <strong>${f0(withChg)} %</strong>.`:''}</div>
+            anyWork?', počítám s dobitím v práci na '+f0(horizon.find(x=>x.work).workTo)+' %':''}${
+            low<0?` — chybí ${f1(-low/100*cfg.evCap)} kWh, <strong style="color:var(--surplus)">budeš muset dobít po cestě</strong> (zadej to níž).`
+            :(low<3?` — to je skoro na nulu, <strong style="color:var(--surplus)">počítej s dobitím po cestě</strong> (zadej to níž).`
+            :(low<cfg.tripArrive?` — dojedeš, ale s malou rezervou.`:'.'))}
+          <br>Doma budeš mít po ${horizon.length>1?'zítřejší':'té'} cestě
+          <strong>${f0(horizon[horizon.length-1].evEndPct)} %</strong>.</div>
       </div>`;
     }
   }
@@ -948,10 +1011,10 @@ function render(){
       f1(s.today&&s.h0>0?s.restLo:s.totalLo)}–${f1(s.today&&s.h0>0?s.restHi:s.totalHi)} kWh</strong>
       · nabíjení plánuju podle toho horšího</div>`:''}
     ${s.today&&s.rest>0.5?`<div class="split">${[
-      ['do auta',u.toCar,'var(--sun)'],
-      ['do baterie',u.toBatt,'var(--batt)'],
-      ['spotřeba domu',u.toHouse,'var(--draw)'],
-      ['přeteče do sítě',u.exp,'var(--surplus)']
+      ['do auta',s.flow.toCar,'var(--sun)'],
+      ['do baterie',s.flow.toBatt,'var(--batt)'],
+      ['spotřeba domu',s.flow.toHouse,'var(--draw)'],
+      ['přeteče do sítě',s.flow.exp,'var(--surplus)']
     ].filter(x=>x[1]>0.2).map(x=>`<span><i style="background:${x[2]}"></i>${
       f1(x[1])} kWh ${x[0]}</span>`).join('')}</div>`:''}
     <div class="cond">${WX[s.daily.code]||''} · ${f0(s.daily.tmin)}–${f0(s.daily.tmax)} °C ·
@@ -1047,6 +1110,19 @@ function wire(s){
     if(c.done){ c.kmDone=c.km||c.kmDone||0; c.km=0; }        // ujeto → km pryč z plánu
     else { c.km=c.kmDone||c.km||0; c.kmDone=0; }             // zpět → vrať je
     saveDays(); render();
+  });
+  const WORK=[0,80,100];
+  document.querySelectorAll('.daytrip').forEach(el=>el.onclick=()=>{
+    const c=dayCfg(el.dataset.key), km=+el.dataset.km;
+    if(c.km===km){ c.km=0; c.workTo=0; }        // druhé ťuknutí cestu zruší
+    else { c.km=km; c.workTo=+el.dataset.work; c.done=false; }
+    saveDays(); render();
+  });
+  document.querySelectorAll('.daywork').forEach(el=>el.onclick=()=>{
+    const c=dayCfg(el.dataset.key);
+    const i=WORK.indexOf(c.workTo||0);
+    c.workTo=WORK[(i<0?0:i+1)%WORK.length];
+    delete c.work; saveDays(); render();
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
