@@ -837,7 +837,8 @@ function render(){
       const home=cfg.roadSoc-cfg.roadKm*cfg.tripCons/100/cfg.evCap*100;
       ro.innerHTML=`Po dobití na ${f0(cfg.roadSoc)} % a ${f0(cfg.roadKm)} km domů dorazíš s
         <strong style="color:${home>=cfg.tripArrive?'var(--batt)':'var(--surplus)'}">${f0(home)} %</strong>.
-        ${home<0?'To nestačí, budeš muset dobít ještě jednou.':'Pak zmáčkni Použít jako stav auta.'}`;
+        ${home<0?'To nestačí, budeš muset dobít ještě jednou.'
+          :'Tlačítko zapíše stav auta na '+f0(cfg.roadSoc)+' % a do dnešního dne '+f0(cfg.roadKm)+' km, které tě ještě čekají.'}`;
     } else ro.innerHTML='Zadej, na kolik procent jsi dobil a kolik kilometrů ti zbývá domů.';
   }
   if(ti){
@@ -1060,13 +1061,22 @@ function initNow(){
   });
   ['roadSoc','roadKm'].forEach(k=>document.getElementById(k).addEventListener('change',()=>apply(false)));
   document.getElementById('roadUse').onclick=()=>{
-    const arrive=cfg.roadSoc-cfg.roadKm*cfg.tripCons/100/cfg.evCap*100;
     if(!(cfg.roadSoc>0)){ document.getElementById('roadOut').textContent='Nejdřív zadej, na kolik procent jsi dobil.'; return; }
-    cfg.evSoc=Math.max(0,Math.round(arrive));
+    // stav auta = co je v něm teď u nabíječky; do dnešního řádku zbývající km domů
+    cfg.evSoc=Math.max(0,Math.min(100,Math.round(cfg.roadSoc)));
     document.getElementById('evSoc').value=cfg.evSoc;
+    const dKm=Math.max(0,Math.round(cfg.roadKm));
+    if(data){
+      const c=dayCfg(data.daily.time[todayIdx]);
+      c.km=dKm; c.done=false; saveDays();
+    }
     cfg.roadSoc=0; cfg.roadKm=0;
     document.getElementById('roadSoc').value=0; document.getElementById('roadKm').value=0;
+    stateAt=new Date(); refreshClock();
     apply(true);
+    const m=document.getElementById('nowMsg');
+    if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Zapsáno:</span> auto '+
+      f0(cfg.evSoc)+' %, do dnešního dne zbývá '+f0(dKm)+' km domů.';
   };
   document.getElementById('tripCons').addEventListener('change',()=>apply(false));
   document.getElementById('nowBtn').onclick=()=>{
