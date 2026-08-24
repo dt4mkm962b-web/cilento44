@@ -52,6 +52,7 @@
   .headline{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
   .big{font-family:var(--mono);font-weight:600;font-size:52px;line-height:.95;letter-spacing:-.02em}
   .headline .unit{font-family:'Barlow Condensed',sans-serif;font-size:22px;color:var(--muted)}
+  .range{font-size:12px;color:var(--muted);margin:4px 0 0}
   .split{display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0 2px;font-size:12.5px;color:var(--muted)}
   .split i{display:inline-block;width:9px;height:9px;border-radius:1px;margin-right:5px;vertical-align:-1px}
   .headline .tot{font-family:'Barlow Condensed',sans-serif;font-size:18px;color:var(--muted);
@@ -275,6 +276,12 @@ function saveDays(){ pruneDays(); store.set('fve-days',JSON.stringify(days)); }
 pruneDays();
 
 let calLog = (()=>{ try{ return JSON.parse(store.get('fve-cal')||'[]'); }catch(e){ return []; } })();
+// průměrná denní spotřeba domu z posledních zapsaných dnů
+function learnedLoad(){
+  const v=calLog.filter(x=>x.c>0).slice(-7);
+  if(v.length<2) return null;
+  return {kwh:v.reduce((a,x)=>a+x.c,0)/v.length, n:v.length};
+}
 function calSuggest(){
   if(!calLog.length) return null;
   const m=calLog.reduce((a,x)=>a+x.m100,0), r=calLog.reduce((a,x)=>a+x.r,0);
@@ -383,7 +390,8 @@ async function load(){
   document.getElementById('out').innerHTML='<div class="status">Načítám předpověď z Open-Meteo…</div>';
   const base=`https://api.open-meteo.com/v1/forecast?latitude=${cfg.lat}&longitude=${cfg.lon}`
     +`&timezone=Europe%2FPrague&past_days=2&forecast_days=5`;
-  const gti=(t,a)=>`${base}&hourly=global_tilted_irradiance&tilt=${t}&azimuth=${a}`;
+  const MODELS='icon_seamless,ecmwf_ifs025,gfs_seamless';
+  const gti=(t,a)=>`${base}&hourly=global_tilted_irradiance&tilt=${t}&azimuth=${a}&models=${MODELS}`;
   const gen=`${base}&hourly=temperature_2m,cloud_cover`
     +`&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,sunshine_duration,daylight_duration`;
   try{
@@ -392,8 +400,15 @@ async function load(){
     const [a,b,g]=await Promise.all([gti(cfg.aTilt,cfg.aAz),gti(cfg.bTilt,cfg.bAz),gen]
       .map(u=>fetch(u,{signal:ctrl.signal}).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })))
       .finally(()=>clearTimeout(to));
-    data={time:g.hourly.time,gtiA:a.hourly.global_tilted_irradiance,gtiB:b.hourly.global_tilted_irradiance,
-          temp:g.hourly.temperature_2m,cloud:g.hourly.cloud_cover,daily:g.daily};
+    // z každého modelu vlastní řada; když jich API vrátí míň, pracuje se s tím, co přišlo
+    const series=o=>Object.keys(o.hourly)
+      .filter(k=>k.startsWith('global_tilted_irradiance'))
+      .map(k=>o.hourly[k]).filter(v=>Array.isArray(v));
+    const sa=series(a), sb=series(b);
+    if(!sa.length||!sb.length) throw new Error('předpověď neobsahuje radiaci');
+    data={time:g.hourly.time,gtiA:sa,gtiB:sb,
+          temp:g.hourly.temperature_2m,cloud:g.hourly.cloud_cover,daily:g.daily,
+          models:Math.min(sa.length,sb.length)};
     const iso=isoOf(new Date());
     todayIdx=Math.max(0,data.daily.time.indexOf(iso));
     reloading=false;
@@ -415,20 +430,29 @@ function simulate(d,st){
   data.time.forEach((t,i)=>{ if(t.startsWith(dateStr)) idx.push(i); });
 
   const lossF=(1-cfg.loss/100)*(cfg.calib/100);
+  const nM=Math.min(data.gtiA.length,data.gtiB.length);
   const hours=idx.map(i=>{
-    const gA=Math.max(0,data.gtiA[i]||0), gB=Math.max(0,data.gtiB[i]||0);
-    const air=data.temp[i], g=(gA*cfg.akWp+gB*cfg.bkWp)/Math.max(cfg.akWp+cfg.bkWp,0.01);
-    const tcell=air+(g/800)*25;
-    const tf=1+(-0.0035)*(tcell-25);
-    let dc=(gA/1000*cfg.akWp + gB/1000*cfg.bkWp)*lossF*Math.min(tf,1.05);
-    return {h:parseInt(data.time[i].slice(11,13)),pv:Math.max(0,Math.min(dc,cfg.inv)),
+    const air=data.temp[i];
+    const vals=[];
+    for(let m=0;m<nM;m++){
+      const gA=Math.max(0,data.gtiA[m][i]||0), gB=Math.max(0,data.gtiB[m][i]||0);
+      const g=(gA*cfg.akWp+gB*cfg.bkWp)/Math.max(cfg.akWp+cfg.bkWp,0.01);
+      const tf=1+(-0.0035)*((air+(g/800)*25)-25);
+      const dc=(gA/1000*cfg.akWp + gB/1000*cfg.bkWp)*lossF*Math.min(tf,1.05);
+      vals.push(Math.max(0,Math.min(dc,cfg.inv)));
+    }
+    const mid=vals.reduce((a,b)=>a+b,0)/vals.length;
+    return {h:parseInt(data.time[i].slice(11,13)),
+            pv:mid, pvLo:Math.min(...vals), pvHi:Math.max(...vals),
             temp:air, cloud:data.cloud[i]};
   });
 
   const shape=h=>{ if(h>=6&&h<9) return 2.6; if(h>=17&&h<22) return 3.0;
                    if(h>=9&&h<17) return 1.3; return 0.75; };
   const rawSum=hours.reduce((s,x)=>s+shape(x.h),0);
-  const extra=Math.max(0,cfg.loadDay-cfg.loadBase*24);
+  const ll=learnedLoad();
+  const loadDay=ll?ll.kwh:cfg.loadDay;
+  const extra=Math.max(0,loadDay-cfg.loadBase*24);
   hours.forEach(x=>{ x.load=cfg.loadBase+extra*shape(x.h)/rawSum; });
 
   const today=(d===todayIdx);
@@ -456,7 +480,7 @@ function simulate(d,st){
       let evP=0;
       if(amps>0 && x.h>=Math.max(from,evOpen) && x.h<to && ev<room-0.01)
         evP=Math.min(kW*w,room-ev);
-      const pv=x.pv*w, ld=x.load*w;
+      const pv=x.pvLo*w, ld=x.load*w;
       const net=pv-ld-evP;
       let g=0,e=0;
       // kam teče výroba: nejdřív dům, pak auto, pak baterie, zbytek do sítě
@@ -524,10 +548,14 @@ function simulate(d,st){
   }
 
   const total=hours.reduce((s,x)=>s+x.pv,0);
+  const totalLo=hours.reduce((s,x)=>s+x.pvLo,0);
+  const totalHi=hours.reduce((s,x)=>s+x.pvHi,0);
   const rest=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pv,0);
+  const restLo=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvLo,0);
+  const restHi=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvHi,0);
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
-  return {hours:base.hours,total,rest,peak,above3,fullAt:base.fullAt,surplus:base.exp,
+  return {hours:base.hours,loadDay,learned:!!ll,total,totalLo,totalHi,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
           imported:base.grid,base,opts,rec,manual,use,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
           date:dateStr,daily:{code:data.daily.weather_code[d],tmax:data.daily.temperature_2m_max[d],
           tmin:data.daily.temperature_2m_min[d],sun:data.daily.sunshine_duration[d]/3600,
@@ -571,14 +599,18 @@ const winStart=(s,o)=>(s.today && o.start===s.h0 && s.startFrac>s.h0) ? hhq(s.st
 
 function band(s){
   const W=720,H=210,padL=30,padR=34,padB=22,padT=10;
-  const hs=s.hours, maxPV=Math.max(3,...hs.map(x=>x.pv))*1.12;
+  const hs=s.hours, maxPV=Math.max(3,...hs.map(x=>x.pvHi||x.pv))*1.08;
   const bw=(W-padL-padR)/hs.length, y=v=>padT+(H-padT-padB)*(1-v/maxPV);
   const yp=p=>padT+(H-padT-padB)*(1-p/100);
   let bars='',ticks='';
   hs.forEach((x,i)=>{
     const X=padL+i*bw, hgt=Math.max(0,(H-padT-padB)-(y(x.pv)-padT));
+    if(x.pvHi>0.02 && !x.past){
+      const hh2=Math.max(0,(H-padT-padB)-(y(x.pvHi)-padT));
+      bars+=`<rect x="${X+1}" y="${y(x.pvHi)}" width="${bw-2}" height="${hh2}" fill="var(--sun)" opacity=".18" rx="1"/>`;
+    }
     if(x.pv>0.02) bars+=`<rect x="${X+1}" y="${y(x.pv)}" width="${bw-2}" height="${hgt}"
-      fill="${x.past?'#D8DEDA':(x.surplus>0.1?'var(--sun)':'var(--sun-soft)')}" rx="1"><title>${hh(x.h)} — ${f1(x.pv)} kW</title></rect>`;
+      fill="${x.past?'#D8DEDA':(x.surplus>0.1?'var(--sun)':'var(--sun-soft)')}" rx="1"><title>${hh(x.h)} — ${f1(x.pvLo)} až ${f1(x.pvHi)} kW</title></rect>`;
     if(x.h%3===0) ticks+=`<text x="${X+bw/2}" y="${H-6}" text-anchor="middle" font-size="10"
       font-family="IBM Plex Mono" fill="#5D6B64">${x.h}</text>`;
   });
@@ -615,6 +647,7 @@ function band(s){
     </svg>
     <div class="legend">
       <span><i class="key" style="background:var(--sun)"></i>výroba (přebytek)</span>
+      <span><i class="key" style="background:var(--sun);opacity:.25"></i>optimistický model</span>
       <span><i class="key" style="background:var(--draw)"></i>spotřeba domu (kW)</span>
       <span><i class="key" style="background:var(--batt)"></i>SOC baterie (%)</span>
       ${s.today?'<span><i class="key" style="background:#D8DEDA"></i>už proběhlo</span>':''}
@@ -628,7 +661,8 @@ function report(s){
   L.push(`FVE — ${den}`);
   L.push('');
   L.push(`${WX[s.daily.code]||'—'} · ${f0(s.daily.tmin)}–${f0(s.daily.tmax)} °C · slunce ${f1(s.daily.sun)} z ${f1(s.daily.light)} h`);
-  L.push(`Výroba za den ${f1(s.total)} kWh${s.today&&s.h0>0?` (od teď ještě ${f1(s.rest)} kWh)`:''}`);
+  L.push(`Výroba za den ${f1(s.total)} kWh (rozptyl modelů ${f1(s.totalLo)}–${f1(s.totalHi)})${
+    s.today&&s.h0>0?` · od teď ještě ${f1(s.rest)} kWh`:''}`);
   L.push(`Špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW · nad 3 kW ${s.above3} h`);
   if(s.today) L.push(`Z toho do auta ${f1(s.use.toCar)}, do baterie ${f1(s.use.toBatt)}, dům ${f1(s.use.toHouse)}, síť ${f1(s.use.exp)} kWh`);
   L.push(s.fullAt!==null ? `Baterie 100 % ~${hh(s.fullAt)}, bez auta by přeteklo ${f1(s.surplus)} kWh`
@@ -767,8 +801,10 @@ function calCard(s){
       <div><label for="calEst">Odhad modelu (kWh)</label>
         <input id="calEst" type="text" readonly tabindex="-1" value="${f1(s.total)}"
           style="background:#EAEFEB;color:var(--muted)"></div>
-      <div><label for="realkwh">Skutečnost ze Solplanetu</label>
+      <div><label for="realkwh">Výroba ze Solplanetu</label>
         <input id="realkwh" type="number" step="0.1" placeholder="40,9"></div>
+      <div><label for="realload">Spotřeba domu (kWh)</label>
+        <input id="realload" type="number" step="0.1" placeholder="12,0"></div>
       <button class="act" id="calAdd" style="margin:0">Přidat den</button>
     </div>
     <div id="calMsg" style="font-size:12px;color:var(--muted);margin:2px 0 10px">
@@ -777,6 +813,11 @@ function calCard(s){
       return n===0?'':n===1?' — poslední den':' — poslední '+n+(n<5?' dny':' dnů');})()}</div>
     ${calLog.length? `<table class="opts" style="margin-top:8px"><thead><tr><th>Den</th>
         <th>Odhad</th><th>Skutečnost</th><th>Rozdíl</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      ${(()=>{const l=learnedLoad(); return l
+        ? `<p style="margin:8px 0 0;color:var(--batt)">Spotřeba domu z posledních ${l.n} dnů:
+           <strong>${f1(l.kwh)} kWh/den</strong> — model ji používá místo odhadu ${f1(cfg.loadDay)}.</p>`
+        : `<p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Zadávej i spotřebu domu.
+           Od druhého dne ji model začne používat místo odhadu ${f1(cfg.loadDay)} kWh/den.</p>`;})()}
       <p style="margin:10px 0 0">${trend} ${calLog.length===1?'Z jednoho zapsaného dne':
         'Ze všech '+calLog.length+' zapsaných dnů'} vychází kalibrace <strong>${sug} %</strong>${
         sug===Math.round(cfg.calib)?' — to už nastavené máš.':''}
@@ -894,6 +935,9 @@ function render(){
       <span class="unit">kWh ${s.today&&s.h0>0?'ještě dnes':'za den'}</span>
       ${s.today&&s.h0>0?`<span class="tot"><span class="totn">${f1(s.total)}</span> kWh celý den</span>`:''}
     </div>
+    ${(data.models>1)?`<div class="range">Modely počasí se rozcházejí: <strong>${
+      f1(s.today&&s.h0>0?s.restLo:s.totalLo)}–${f1(s.today&&s.h0>0?s.restHi:s.totalHi)} kWh</strong>
+      · nabíjení plánuju podle toho horšího</div>`:''}
     ${s.today&&s.rest>0.5?`<div class="split">${[
       ['do auta',u.toCar,'var(--sun)'],
       ['do baterie',u.toBatt,'var(--batt)'],
@@ -1002,11 +1046,14 @@ function wire(s){
     const real=parseFloat((el.value||'').replace(',','.'));
     const msg=document.getElementById('calMsg');
     if(!(real>0)){ msg.textContent='Zadej skutečnou výrobu v kWh.'; return; }
+    const cons=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
     const m100=s.total*100/cfg.calib;
+    const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
-    el.value=''; writeHash(); render();
+    el.value=''; const rl=document.getElementById('realload'); if(rl) rl.value='';
+    writeHash(); render();
     const den=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',
       {weekday:'long',day:'numeric',month:'numeric'});
     const m2=document.getElementById('calMsg');
