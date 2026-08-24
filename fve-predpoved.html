@@ -211,7 +211,7 @@ const DEF = {
   loss:9, inv:10, calib:100,
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
   loadDay:12, loadBase:0.35,
-  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, charging:0,
+  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, charging:0,
   tripKm:0, tripArrive:15, tripCons:17, roadSoc:0, roadKm:0
 };
 const FIELDS = [
@@ -241,6 +241,7 @@ const FIELDS = [
   ['h','Elektromobil'],
   ['evCap','Kapacita baterie (kWh)','number','1'],
   ['evTarget','Strop nabíjení auta (%)','number','5'],
+  ['evEff','Účinnost nabíjení auta (%)','number','1'],
   ['tripArrive','Minimum v autě po příjezdu (%)','number','5'],
   ['evPhases','Počet fází','number','1'],
   ['evFrom','Nabíjet nejdřív od (h)','number','1'],
@@ -467,6 +468,7 @@ function simulate(d,st){
   const why = back>=24 ? 'away' : (back>=cfg.evTo ? 'late-back' : (h0>=cfg.evTo ? 'over' : 'sun'));
   // podlaha nikdy nesmí být výš, než kde baterie právě je — jinak by nešlo nabíjet vůbec
   const floorPct=Math.min(cfg.dayFloor, startSoc/cfg.battCap*100);
+  const effEv=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
   const roomCap=Math.max(0,cfg.evTarget/100*cfg.evCap-evNow);   // kolik se do auta vejde
   const room=canCharge?roomCap:0;                                // kolik z toho lze dnes nabít
 
@@ -478,8 +480,9 @@ function simulate(d,st){
       if(x.h<h0) return {...x,evP:0,soc:startSoc,surplus:0,grid:0,past:true};
       const w = (today && x.h===h0) ? Math.max(0,h0+1-startFrac) : 1;   // rozpracovaná hodina
       let evP=0;
+      // evP = co odebere nabíječka, ev = co skutečně přiteče do baterie auta
       if(amps>0 && x.h>=Math.max(from,evOpen) && x.h<to && ev<room-0.01)
-        evP=Math.min(kW*w,room-ev);
+        evP=Math.min(kW*w,(room-ev)/effEv);
       const pv=x.pvLo*w, ld=x.load*w;
       const net=pv-ld-evP;
       let g=0,e=0;
@@ -489,7 +492,7 @@ function simulate(d,st){
       if(net>0){ const ch=Math.min(net,cfg.battChg,(max-soc)/0.95); soc+=ch*0.95; toBatt+=ch;
                  e=net-ch; exp+=e; }
       else{ const dis=Math.min(-net,cfg.battDis,Math.max(0,soc-min)); soc-=dis; g=-net-dis; grid+=g; }
-      ev+=evP; if(evP>0) end=x.h+1;
+      ev+=evP*effEv; if(evP>0) end=x.h+1;
       if(x.h<=22) minSoc=Math.min(minSoc,soc);
       if(fullAt===null && soc>=max-0.05 && x.pv>0) fullAt=x.h;
       if(x.h===22) socEve=soc;
@@ -803,8 +806,10 @@ function calCard(s){
           style="background:#EAEFEB;color:var(--muted)"></div>
       <div><label for="realkwh">Výroba ze Solplanetu</label>
         <input id="realkwh" type="number" step="0.1" placeholder="40,9"></div>
-      <div><label for="realload">Spotřeba domu (kWh)</label>
-        <input id="realload" type="number" step="0.1" placeholder="12,0"></div>
+      <div><label for="realload">Celková spotřeba (kWh)</label>
+        <input id="realload" type="number" step="0.1" placeholder="47,7"></div>
+      <div><label for="realev">Z toho do auta (kWh)</label>
+        <input id="realev" type="number" step="0.1" placeholder="30,0"></div>
       <button class="act" id="calAdd" style="margin:0">Přidat den</button>
     </div>
     <div id="calMsg" style="font-size:12px;color:var(--muted);margin:2px 0 10px">
@@ -814,10 +819,11 @@ function calCard(s){
     ${calLog.length? `<table class="opts" style="margin-top:8px"><thead><tr><th>Den</th>
         <th>Odhad</th><th>Skutečnost</th><th>Rozdíl</th><th></th></tr></thead><tbody>${rows}</tbody></table>
       ${(()=>{const l=learnedLoad(); return l
-        ? `<p style="margin:8px 0 0;color:var(--batt)">Spotřeba domu z posledních ${l.n} dnů:
+        ? `<p style="margin:8px 0 0;color:var(--batt)">Čistá spotřeba domu z posledních ${l.n} dnů:
            <strong>${f1(l.kwh)} kWh/den</strong> — model ji používá místo odhadu ${f1(cfg.loadDay)}.</p>`
-        : `<p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Zadávej i spotřebu domu.
-           Od druhého dne ji model začne používat místo odhadu ${f1(cfg.loadDay)} kWh/den.</p>`;})()}
+        : `<p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Zadávej i celkovou spotřebu
+           a kolik z ní šlo do auta — model si dopočítá čistou spotřebu domu a od druhého dne
+           ji použije místo odhadu ${f1(cfg.loadDay)} kWh/den.</p>`;})()}
       <p style="margin:10px 0 0">${trend} ${calLog.length===1?'Z jednoho zapsaného dne':
         'Ze všech '+calLog.length+' zapsaných dnů'} vychází kalibrace <strong>${sug} %</strong>${
         sug===Math.round(cfg.calib)?' — to už nastavené máš.':''}
@@ -1046,20 +1052,26 @@ function wire(s){
     const real=parseFloat((el.value||'').replace(',','.'));
     const msg=document.getElementById('calMsg');
     if(!(real>0)){ msg.textContent='Zadej skutečnou výrobu v kWh.'; return; }
-    const cons=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
+    const consAll=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
+    const evAdd=parseFloat((document.getElementById('realev').value||'').replace(',','.'));
+    const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
+    // od celkové spotřeby odečti, co si vzala nabíječka (v autě přibylo méně kvůli ztrátám)
+    const cons=(consAll>0) ? Math.max(0, consAll-(evAdd>0?evAdd/eff:0)) : NaN;
     const m100=s.total*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
     calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
-    el.value=''; const rl=document.getElementById('realload'); if(rl) rl.value='';
+    el.value='';
+    ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
     writeHash(); render();
     const den=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',
       {weekday:'long',day:'numeric',month:'numeric'});
     const m2=document.getElementById('calMsg');
     if(m2) m2.innerHTML=`<span style="color:var(--batt);font-weight:600">Zapsáno — ${den}:</span>
       model ${f1(s.total)} kWh, skutečnost ${f1(real)} kWh
-      (${real>=s.total?'+':''}${Math.round((real/s.total-1)*100)} %).`;
+      (${real>=s.total?'+':''}${Math.round((real/s.total-1)*100)} %).${
+      cons>0?` Čistá spotřeba domu ${f1(cons)} kWh${evAdd>0?` (z ${f1(consAll)} po odečtení nabíjení)`:''}.`:''}`;
   };
   document.querySelectorAll('.calDel').forEach(el=>el.onclick=()=>{
     calLog=calLog.filter(x=>x.d!==el.dataset.d); writeHash(); render();
