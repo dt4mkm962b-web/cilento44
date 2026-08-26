@@ -149,6 +149,7 @@
   }
 
   .dayedit{padding:2px 11px 11px;display:flex;flex-direction:column;gap:6px}
+  .dewhy{font-size:11.5px;color:var(--muted);line-height:1.45}
   .derow{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
   .derow input[type=number]{width:64px;padding:6px 6px;text-align:center}
   .derow select{width:auto;flex:1 1 130px;padding:6px}
@@ -332,7 +333,16 @@ function dayCfg(dateStr){
 function saveDays(){ pruneDays(); store.set('fve-days',JSON.stringify(days)); }
 pruneDays();
 
-let calLog = (()=>{ try{ return JSON.parse(store.get('fve-cal')||'[]'); }catch(e){ return []; } })();
+// Kalibrační dny natvrdo v souboru — použijí se, když prohlížeč nic nemá.
+// Formát: {d:'RRRR-MM-DD', r:skutečná výroba kWh, m100:odhad modelu při kalibraci 100 %, c:čistá spotřeba domu kWh}
+const SEED_CAL = [];
+let calLog = (()=>{
+  try{
+    const v=JSON.parse(store.get('fve-cal')||'null');
+    if(Array.isArray(v)&&v.length) return v;
+  }catch(e){}
+  return SEED_CAL.slice();
+})();
 // průměrná denní spotřeba domu z posledních zapsaných dnů
 function learnedLoad(){
   const v=calLog.filter(x=>x.c>0).slice(-7);
@@ -611,6 +621,18 @@ function simulate(d,st){
   const wt = (today && cfg.winTo>0)   ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
   const win = canCharge && wt>wf ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
   win.wf=wf; win.wt=wt;
+  // proč není okno delší — vyzkoušej hodinu dřív a hodinu později
+  const failWhy=r=>{
+    if(!r) return null;
+    if(r.grid>base.grid+0.3) return `koupil bys ${(r.grid-base.grid).toFixed(1)} kWh ze sítě`;
+    if(r.socEvePct<Math.min(cfg.reserve,base.socEvePct)-0.5)
+      return `ve 22:00 by v baterii zbylo ${Math.round(r.socEvePct)} % místo ${Math.round(cfg.reserve)} %`;
+    if(r.minSocPct<floorPct-0.5)
+      return `baterie by přes den klesla na ${Math.round(r.minSocPct)} %`;
+    return null;
+  };
+  win.limitBefore = win.wf>evOpen ? failWhy(run(cfg.evAmps,win.wf-1,win.wt)) : null;
+  win.limitAfter  = win.wt<cfg.evTo ? failWhy(run(cfg.evAmps,win.wf,win.wt+1)) : null;
   win.tooLow = win.socEvePct < cfg.reserve-0.5;
   win.tooDeep = win.minSocPct < floorPct-0.5;
   win.buysGrid = win.grid > base.grid+0.3;
@@ -866,6 +888,13 @@ function weekTable(wk){
         <input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" inputmode="numeric">
         ${TRIPS.map(t=>`<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}"
           data-km="${t[1]}">${t[0]}</button>`).join('')}
+      </div>
+      <div class="dewhy">
+        Výroba ${f1(s.total)} kWh (pesimisticky ${f1(s.totalLo)}) · spotřeba domu ${f1(s.loadDay)} kWh${
+          s.learned?' (naučená)':''}${
+        s.win.evDone>0.3?` · okno ${s.win.wf}–${s.win.wt} h, ${f1(s.win.evDone)} kWh do auta`:''}
+        ${s.win.limitBefore?`<br>Dřív začít nejde: ${s.win.limitBefore}.`:''}
+        ${s.win.limitAfter?`<br>Déle nabíjet nejde: ${s.win.limitAfter}.`:''}
       </div>
       <div class="derow">
         <select class="dayback" data-key="${s.date}">${BACK.map(o=>
@@ -1272,6 +1301,25 @@ function wire(s){
     const m=document.getElementById('nowMsg');
     if(m) m.innerHTML='<span style="color:var(--muted)">Den smazán.</span>';
   });
+  const cc=document.getElementById('calCopy');
+  if(cc) cc.onclick=async()=>{
+    try{ await navigator.clipboard.writeText(document.getElementById('calDump').value);
+      cc.textContent='Zkopírováno'; setTimeout(()=>cc.textContent='Zkopírovat',1500);
+    }catch(e){ document.getElementById('calDump').select(); }
+  };
+  const cpaste=document.getElementById('calPaste');
+  if(cpaste) cpaste.onclick=()=>{
+    const msg=document.getElementById('calMsg');
+    try{
+      const v=JSON.parse(document.getElementById('calDump').value);
+      if(!Array.isArray(v)) throw 0;
+      calLog=v.filter(x=>x&&x.d&&isFinite(x.r)&&isFinite(x.m100));
+      calLog.sort((a,b)=>a.d<b.d?-1:1);
+      writeHash(); render();
+      const m=document.getElementById('calMsg');
+      if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Načteno '+calLog.length+' dnů.</span>';
+    }catch(e){ if(msg) msg.textContent='To pole nejde přečíst — musí to být seznam ve složených závorkách.'; }
+  };
   const clr=document.getElementById('calClear');
   if(clr) clr.onclick=()=>{
     if(clr.dataset.armed){ calLog=[]; writeHash(); render();
@@ -1380,6 +1428,25 @@ function initNow(){
     const m=document.getElementById('nowMsg');
     if(m) m.innerHTML='<span style="color:var(--muted)">Den smazán.</span>';
   });
+  const cc=document.getElementById('calCopy');
+  if(cc) cc.onclick=async()=>{
+    try{ await navigator.clipboard.writeText(document.getElementById('calDump').value);
+      cc.textContent='Zkopírováno'; setTimeout(()=>cc.textContent='Zkopírovat',1500);
+    }catch(e){ document.getElementById('calDump').select(); }
+  };
+  const cpaste=document.getElementById('calPaste');
+  if(cpaste) cpaste.onclick=()=>{
+    const msg=document.getElementById('calMsg');
+    try{
+      const v=JSON.parse(document.getElementById('calDump').value);
+      if(!Array.isArray(v)) throw 0;
+      calLog=v.filter(x=>x&&x.d&&isFinite(x.r)&&isFinite(x.m100));
+      calLog.sort((a,b)=>a.d<b.d?-1:1);
+      writeHash(); render();
+      const m=document.getElementById('calMsg');
+      if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Načteno '+calLog.length+' dnů.</span>';
+    }catch(e){ if(msg) msg.textContent='To pole nejde přečíst — musí to být seznam ve složených závorkách.'; }
+  };
   const clr=document.getElementById('calClear');
   if(clr) clr.onclick=()=>{
     if(clr.dataset.armed){ calLog=[]; writeHash(); render();
