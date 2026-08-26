@@ -654,53 +654,56 @@ function week(){
   for(let k=0;k<n;k++){
     const d=todayIdx+k;
     const dc=dayCfg(data.daily.time[d]);
-    const dc0=dc;
-    const s=simulate(d,{batt,ev,h0:(d===todayIdx?nowH:0),startFrac:(d===todayIdx?nowFrac:0),
-      back:dc.back});
-    s.km=dc.km; s.back=dc.back;
-    // dnešní jízdu neodečítej znovu, pokud už proběhla — zadaný stav auta ji má v sobě
-    const doneBy = (dc.back>0 && dc.back<24) ? dc.back : 18;
-    s.driven = (d!==todayIdx) ? false
-      : (dc.done!==undefined ? !!dc.done : nowH>=doneBy);
-    s.drive = s.driven ? 0 : dc.km*cfg.tripCons/100;
-    s.workTo = dc.workTo||0;
-    s.work = s.workTo>0 && s.drive>0;
-    s.evStartPct=ev/cfg.evCap*100;
-    let evEnd, low;
-    if(s.work){
-      const leg1=s.drive*Math.max(0,Math.min(100,cfg.workSplit))/100;
-      const leg2=s.drive-leg1;
-      const atWork=ev-leg1;                                   // nejhorší bod dne
-      const target=s.workTo/100*cfg.evCap;
-      const afterWork=Math.max(atWork,Math.min(target,cfg.evCap));
-      s.workAdd=Math.max(0,afterWork-atWork);
-      s.atWorkPct=atWork/cfg.evCap*100;
-      evEnd=afterWork-leg2+s.win.evDone;
-      low=Math.min(atWork,evEnd);
-    } else {
-      evEnd=ev+s.use.evDone-s.drive;
-      low=evEnd;
-    }
-    s.evEndKWh=evEnd; s.evEndPct=evEnd/cfg.evCap*100;
-    s.lowPct=low/cfg.evCap*100;
+    const today=(d===todayIdx);
 
-    // průběh nabití auta po hodinách — jízdy jako schody, nabíjení jako náběh
+    // nejdřív jízda: kolik má auto ve chvíli, kdy se doma může začít nabíjet
+    const doneBy=(dc.back>0 && dc.back<24)?dc.back:18;
+    const driven=today ? (dc.done!==undefined ? !!dc.done : nowH>=doneBy) : false;
+    const drive=driven?0:dc.km*cfg.tripCons/100;
+    const workTo=dc.workTo||0;
+    const work=workTo>0 && drive>0;
+    let evHome, low, atWork=null, workAdd=0;
+    if(work){
+      const leg1=drive*Math.max(0,Math.min(100,cfg.workSplit))/100;
+      const leg2=drive-leg1;
+      atWork=ev-leg1;
+      const afterWork=Math.max(atWork,Math.min(workTo/100*cfg.evCap,cfg.evCap));
+      workAdd=Math.max(0,afterWork-atWork);
+      evHome=afterWork-leg2;
+      low=Math.min(atWork,evHome);
+    } else {
+      evHome=ev-drive;
+      low=evHome;
+    }
+    const evBase=Math.max(0,Math.min(cfg.evCap,evHome));   // z čeho se doma nabíjí
+
+    const s=simulate(d,{batt,ev:evBase,h0:(today?nowH:0),startFrac:(today?nowFrac:0),back:dc.back});
+    s.km=dc.km; s.back=dc.back; s.driven=driven; s.drive=drive;
+    s.workTo=workTo; s.work=work; s.workAdd=workAdd;
+    s.atWorkPct=(atWork!==null?atWork:ev)/cfg.evCap*100;
+    s.evStartPct=ev/cfg.evCap*100;
+
+    // strop 100 % platí, ale schodek nechávám záporný — jinak by zmizelo varování "nedojedeš"
+    const evEnd=Math.min(cfg.evCap, evHome + s.win.evDone);
+    s.evEndKWh=evEnd; s.evEndPct=evEnd/cfg.evCap*100;
+    s.lowPct=Math.min(low,evEnd)/cfg.evCap*100;
+
+    // průběh nabití auta po hodinách
     (function(){
       const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
       const away=dc.back>0;
-      const depart = away?Math.max(5,cfg.evFrom-1):12;
-      const back   = (dc.back>0&&dc.back<24)?dc.back:20;
-      const workH  = Math.max(depart+1,Math.min(back-1,Math.round((depart+back)/2)));
-      const leg1   = s.work ? s.drive*Math.max(0,Math.min(100,cfg.workSplit))/100 : s.drive;
-      const leg2   = s.work ? s.drive-leg1 : 0;
-      const target = s.work ? s.workTo/100*cfg.evCap : 0;
+      const depart=away?Math.max(5,cfg.evFrom-1):12;
+      const back=(dc.back>0&&dc.back<24)?dc.back:20;
+      const workH=Math.max(depart+1,Math.min(back-1,Math.round((depart+back)/2)));
+      const leg1=work?drive*Math.max(0,Math.min(100,cfg.workSplit))/100:drive;
+      const leg2=work?drive-leg1:0;
       let car=ev;
       s.carPct=s.win.hours.map(x=>{
-        if(x.past) return car/cfg.evCap*100;
-        if(x.h===depart && s.drive>0) car-=leg1;
-        if(s.work && x.h===workH) car=Math.max(car,Math.min(target,cfg.evCap));
-        if(s.work && x.h===back && leg2>0) car-=leg2;
-        car+=(x.evP||0)*eff;
+        if(x.past) return Math.max(0,Math.min(100,car/cfg.evCap*100));
+        if(x.h===depart && drive>0) car-=leg1;
+        if(work && x.h===workH) car=Math.max(car,Math.min(workTo/100*cfg.evCap,cfg.evCap));
+        if(work && x.h===back && leg2>0) car-=leg2;
+        car=Math.min(cfg.evCap,car+(x.evP||0)*eff);
         return Math.max(0,Math.min(100,car/cfg.evCap*100));
       });
     })();
