@@ -122,6 +122,14 @@
   .cb-res b{font-family:var(--mono);font-size:16px;font-weight:600;line-height:1.15}
   .cb-res i{font-style:normal;font-size:10px;color:var(--muted);line-height:1.3}
   .cb-note{font-size:12px;color:var(--muted);margin:9px 0 0}
+  .cb-warn{font-size:12.5px;color:var(--surplus);margin:9px 0 0;line-height:1.4}
+  .chargebox.bad{border-left-color:var(--surplus)}
+  .cb-sel{display:flex;align-items:center;gap:5px}
+  .cb-sel select{width:auto;padding:7px 6px;font-size:14px}
+  .cb-sel span{color:var(--muted)}
+  .cb-auto{margin:0!important;padding:7px 10px;font-size:11px;background:transparent;
+    color:var(--muted);border-color:var(--hair)}
+  .cb-off{font-family:var(--mono);font-size:17px}
   .daylist{border:1px solid var(--hair);border-radius:3px;overflow:hidden;background:var(--card)}
   .dayrow+.dayrow{border-top:1px solid var(--hair)}
   .dayrow.sel{background:#DCE8E1}
@@ -219,7 +227,6 @@
   </div>
 
   <div class="nowrow" style="margin-top:12px">
-    <button class="act" id="chargeBtn" style="margin:0">Nabíjím</button>
     <button class="act" id="nowBtn" style="margin:0">Přepočítat vše</button>
   </div>
   <div id="tripInfo" style="margin-top:11px"></div>
@@ -259,7 +266,7 @@ const DEF = {
   loss:9, inv:10, calib:100,
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
   loadDay:12, loadBase:0.35,
-  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, charging:0,
+  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, winFrom:-1, winTo:-1,
   tripKm:0, tripArrive:15, tripCons:17, workTarget:80, workSplit:50, roadSoc:0, roadKm:0
 };
 const FIELDS = [
@@ -574,9 +581,7 @@ function simulate(d,st){
   const ok=r=>!(r.grid>baseGrid+0.3
              || r.socEvePct<Math.min(cfg.reserve,baseEve)-0.5
              || r.minSocPct<floorPct-0.5);
-  const startAt = !today ? null
-    : (st.charging ? h0
-      : null);
+  const startAt = null;
   const opts=[6,8,10,12].map(a=>{
     let best=null, earliest=null;
     for(let f=from0;f<cfg.evTo;f++){
@@ -596,12 +601,20 @@ function simulate(d,st){
   const rec=opts.find(o=>o.evDone>=bestKwh-0.3) || opts[0];
 
   // ruční proud: vezmi rovnou nejlepší okno pro ten proud — stejný výpočet jako tabulka
-  const manual = (st.charging && canCharge)
-    ? (opts.find(o=>o.amps===cfg.evAmps) || null) : null;
+  const manual = null;
   const use = manual || rec;
+  // okno zvolené uživatelem (nebo doporučené, dokud nesáhne)
+  const wf = (today && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (rec&&rec.evDone>0.3?rec.start:evOpen);
+  const wt = (today && cfg.winTo>0) ? Math.min(cfg.winTo,cfg.evTo) : (rec&&rec.evDone>0.3?rec.end:evOpen);
+  const win = canCharge && wt>wf ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
+  win.wf=wf; win.wt=wt;
+  win.tooLow = win.socEvePct < cfg.reserve-0.5;
+  win.tooDeep = win.minSocPct < floorPct-0.5;
+  win.buysGrid = win.grid > base.grid+0.3;
+
   // toky pro zobrazení: stejná řada, z jaké je velké číslo nahoře
-  const flow = (use && use.evDone>0.3)
-    ? run(use.amps,use.start,use.end,true) : run(0,99,99,true);
+  const flow = (win && win.evDone>0.3)
+    ? run(win.amps,win.wf,win.wt,true) : run(0,99,99,true);
 
   // kdyby se začalo hned teď se stejným proudem a stejnou délkou — co by se pokazilo?
   let whyLater=null;
@@ -627,7 +640,7 @@ function simulate(d,st){
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
   return {hours:base.hours,loadDay,learned:!!ll,total,totalLo,totalHi,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
-          imported:base.grid,base,opts,rec,manual,use,flow,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
+          imported:base.grid,base,opts,rec,manual,use,win,flow,evOpen,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
           date:dateStr,daily:{code:data.daily.weather_code[d],tmax:data.daily.temperature_2m_max[d],
           tmin:data.daily.temperature_2m_min[d],sun:data.daily.sunshine_duration[d]/3600,
           light:data.daily.daylight_duration[d]/3600,
@@ -643,7 +656,7 @@ function week(){
     const dc=dayCfg(data.daily.time[d]);
     const dc0=dc;
     const s=simulate(d,{batt,ev,h0:(d===todayIdx?nowH:0),startFrac:(d===todayIdx?nowFrac:0),
-      back:dc.back,charging:(d===todayIdx?cfg.charging:0)});
+      back:dc.back});
     s.km=dc.km; s.back=dc.back;
     // dnešní jízdu neodečítej znovu, pokud už proběhla — zadaný stav auta ji má v sobě
     const doneBy = (dc.back>0 && dc.back<24) ? dc.back : 18;
@@ -662,7 +675,7 @@ function week(){
       const afterWork=Math.max(atWork,Math.min(target,cfg.evCap));
       s.workAdd=Math.max(0,afterWork-atWork);
       s.atWorkPct=atWork/cfg.evCap*100;
-      evEnd=afterWork-leg2+s.use.evDone;
+      evEnd=afterWork-leg2+s.win.evDone;
       low=Math.min(atWork,evEnd);
     } else {
       evEnd=ev+s.use.evDone-s.drive;
@@ -682,7 +695,7 @@ function week(){
       const leg2   = s.work ? s.drive-leg1 : 0;
       const target = s.work ? s.workTo/100*cfg.evCap : 0;
       let car=ev;
-      s.carPct=s.use.hours.map(x=>{
+      s.carPct=s.win.hours.map(x=>{
         if(x.past) return car/cfg.evCap*100;
         if(x.h===depart && s.drive>0) car-=leg1;
         if(s.work && x.h===workH) car=Math.max(car,Math.min(target,cfg.evCap));
@@ -694,7 +707,7 @@ function week(){
 
     const needKWh=cfg.tripArrive/100*cfg.evCap;
     s.short=Math.max(0,needKWh-evEnd);
-    batt=s.use.endBatt;
+    batt=s.win.endBatt;
     ev=Math.max(0,evEnd);
     out.push(s);
   }
@@ -727,8 +740,8 @@ function band(s){
   });
   const loadPath=hs.map((x,i)=>`${i?'L':'M'}${padL+i*bw+bw/2},${y(x.load)}`).join(' ');
 
-  const charging = s.rec && s.rec.evDone>0.3;
-  const socH=(charging?s.rec.hours:s.base.hours).filter(x=>!x.past);
+  const charging = s.win && s.win.evDone>0.3;
+  const socH=(charging?s.win.hours:s.base.hours).filter(x=>!x.past);
   const off=hs.length-socH.length;
   const socPath=socH.map((x,i)=>`${i?'L':'M'}${padL+(i+off)*bw+bw/2},${yp(x.soc/cfg.battCap*100)}`).join(' ');
   const carPath=(s.carPct&&s.carPct.length)
@@ -740,12 +753,12 @@ function band(s){
     fill="var(--batt)">rezerva</text>`;
 
   let evBand='';
-  if(charging && s.rec.end!==null){
-    const i0=hs.findIndex(x=>x.h===s.rec.start), i1=hs.findIndex(x=>x.h===s.rec.end-1);
+  if(charging && s.win.end!==null){
+    const i0=hs.findIndex(x=>x.h===s.win.start), i1=hs.findIndex(x=>x.h===s.win.end-1);
     const X=padL+i0*bw, Wd=(i1-i0+1)*bw;
     evBand=`<rect x="${X}" y="${padT}" width="${Wd}" height="${H-padT-padB}" fill="var(--batt)" opacity=".10"/>
       <text x="${X+Wd/2}" y="${padT+12}" text-anchor="middle" font-size="10.5"
-      font-family="Barlow Condensed" letter-spacing="1" fill="var(--batt)">AUTO ${s.rec.amps} A</text>`;
+      font-family="Barlow Condensed" letter-spacing="1" fill="var(--batt)">AUTO ${s.win.amps} A</text>`;
   }
   const gl=[0,maxPV/2,maxPV].map(v=>`<line x1="${padL}" y1="${y(v)}" x2="${W-padR}" y2="${y(v)}" stroke="#C9D2CB"/>
     <text x="${padL-5}" y="${y(v)+3}" text-anchor="end" font-size="10" font-family="IBM Plex Mono" fill="#5D6B64">${f0(v)}</text>`).join('');
@@ -785,7 +798,7 @@ function report(s){
   L.push(s.fullAt!==null ? `Baterie 100 % ~${hh(s.fullAt)}, bez auta by přeteklo ${f1(s.surplus)} kWh`
                          : `Baterie se dnes na 100 % nedostane`);
   L.push('');
-  const u=s.use, man=!!s.manual;
+  const u=s.win, man=false;
   if(!s.canCharge){
     L.push(`Auto: ${s.why==='away'?'ten den doma není':s.why==='late-back'?'vrací se až v '+hh(s.back):'dnes už je po nabíjení'}. Baterie domu ${f0(u.socEvePct)} %.`);
   } else if(u.evDone>0.3){
@@ -1051,8 +1064,19 @@ function render(){
   const morn=s.hours.filter(x=>x.h<13).reduce((a,x)=>a+x.pv,0);
   const aft =s.hours.filter(x=>x.h>=13).reduce((a,x)=>a+x.pv,0);
   const tilt = morn>aft*1.25 ? 'víc dopoledne' : (aft>morn*1.25 ? 'víc odpoledne' : 'rovnoměrně');
-  const pick=s.opts.find(o=>o.amps===cfg.evAmps) || s.opts[0];
-  const evAfter=s.evEndPct+((pick?pick.evDone:0)-(s.use?s.use.evDone:0))/cfg.evCap*100;
+  const W=s.win, carEnd=s.evStartPct+W.evDone/cfg.evCap*100;
+  const hrsOpt=(from,to,sel)=>{ let o='';
+    for(let h=from;h<=to;h++) o+=`<option value="${h}"${h===sel?' selected':''}>${hh(h)}</option>`;
+    return o; };
+  const warn = !s.canCharge ? null
+    : (W.evDone<=0.3 ? {t:'V tomhle okně nic nenabiješ.',
+        d:(s.roomCap<=0.1?'Auto je na stropu '+f0(cfg.evTarget)+' %.':'Slunce v té době nestačí.')}
+    : (W.buysGrid ? {t:`Koupíš ${f1(W.grid-s.base.grid)} kWh ze sítě.`,
+        d:'Zkrať okno nebo sniž proud.'}
+    : (W.tooLow ? {t:`Baterie domu se do 22:00 nedobije — skončí na ${f0(W.socEvePct)} %.`,
+        d:`Tvoje rezerva je ${f0(cfg.reserve)} %. Zkrať okno nebo sniž proud.`}
+    : (W.tooDeep ? {t:`Baterie domu klesne až na ${f0(W.minSocPct)} %.`,
+        d:`Podlaha je ${f0(cfg.dayFloor)} %. Začni později.`} : null))));
 
   document.getElementById('out').innerHTML=`
     <div class="headline">
@@ -1071,25 +1095,31 @@ function render(){
     ].filter(x=>x[1]>0.2).map(x=>`<span><i style="background:${x[2]}"></i>${
       f1(x[1])} kWh ${x[0]}</span>`).join('')}</div>`:''}
 
-    <div class="chargebox">
-      <div class="cb-top">
-        <div class="stepper${cfg.charging?' on':''}">
+    <div class="chargebox${warn?' bad':''}">
+      ${s.canCharge?`<div class="cb-top">
+        <div class="stepper">
           <button id="ampDown">−</button><span id="ampVal">${cfg.evAmps} A</span><button id="ampUp">+</button>
         </div>
-        <div class="cb-win">${
-          !s.canCharge
-          ? `<b>${s.why==='away'?'auto není doma':s.why==='late-back'?'vrací se '+hh(s.back):'dnes už je po slunci'}</b>`
-          : (pick && pick.evDone>0.3
-             ? `<b>${winStart(s,pick)}–${hh(pick.end)}</b><i>${f1(pick.kW)} kW · nabiješ ${f1(pick.evDone)} kWh</i>`
-             : `<b>nenabíjet</b><i>${s.roomCap<=0.1?'auto je na stropu':'slunce dnes nestačí'}</i>`)}
+        <div class="cb-sel">
+          <select id="winFrom">${hrsOpt(s.evOpen,cfg.evTo-1,W.wf)}</select>
+          <span>–</span>
+          <select id="winTo">${hrsOpt(s.evOpen+1,cfg.evTo,W.wt)}</select>
         </div>
-      </div>
+        <button class="act cb-auto" id="winAuto">Podle modelu</button>
+      </div>`:`<div class="cb-top"><b class="cb-off">${
+        s.why==='away'?'Auto dnes není doma':s.why==='late-back'?'Auto se vrací až v '+hh(s.back):
+        'Dnes už je po slunci'}</b></div>`}
+
       <div class="cb-res">
-        <span><b>${f0(evAfter)} %</b><i>auto večer${s.work?' · v práci '+f0(s.atWorkPct)+' %':''}</i></span>
-        <span><b>${f0(pick?pick.socEvePct:s.base.socEvePct)} %</b><i>baterie 22:00 · rezerva ${f0(cfg.reserve)} %</i></span>
-        <span><b>${f0(pick?pick.minSocPct:s.base.minSocPct)} %</b><i>baterie nejníž</i></span>
+        <span><b>${f0(carEnd)} %</b><i>auto na konci okna${
+          W.evDone>0.3?' (+'+f1(W.evDone)+' kWh)':''}</i></span>
+        <span><b>${f0(s.evEndPct)} %</b><i>auto večer${s.work?' · v práci '+f0(s.atWorkPct)+' %':''}</i></span>
+        <span><b style="color:${W.tooLow?'var(--surplus)':'var(--ink)'}">${f0(W.socEvePct)} %</b>
+          <i>baterie 22:00 · rezerva ${f0(cfg.reserve)} %</i></span>
       </div>
-      ${s.whyLater&&pick&&pick.evDone>0.3&&pick.start>s.h0?`<p class="cb-note">${s.whyLater}</p>`:''}
+      ${warn?`<p class="cb-warn"><strong>${warn.t}</strong> ${warn.d}</p>`
+            :(s.canCharge?`<p class="cb-note">Vyjde to — ze sítě nic navíc a baterie domu zůstane nad rezervou
+              (nejníž ${f0(W.minSocPct)} %).</p>`:'')}
     </div>
 
     ${weekTable(wk)}
@@ -1140,6 +1170,15 @@ function wire(s){
     const i=AMPS.indexOf(cfg.evAmps), j=Math.max(0,Math.min(AMPS.length-1,(i<0?0:i)+d));
     cfg.evAmps=AMPS[j]; writeHash(); render();
   };
+  const wfEl=document.getElementById('winFrom'), wtEl=document.getElementById('winTo');
+  if(wfEl) wfEl.onchange=()=>{ cfg.winFrom=+wfEl.value;
+    if(cfg.winTo<=cfg.winFrom) cfg.winTo=Math.min(cfg.evTo,cfg.winFrom+1);
+    writeHash(); render(); };
+  if(wtEl) wtEl.onchange=()=>{ cfg.winTo=+wtEl.value; writeHash(); render(); };
+  const wa=document.getElementById('winAuto');
+  if(wa) wa.onclick=()=>{ cfg.winFrom=-1; cfg.winTo=-1;
+    if(s.rec&&s.rec.evDone>0.3) cfg.evAmps=s.rec.amps; writeHash(); render(); };
+
   const ad=document.getElementById('ampDown'), au=document.getElementById('ampUp');
   if(ad){ ad.onclick=()=>step(-1); ad.disabled=cfg.evAmps<=AMPS[0]; }
   if(au){ au.onclick=()=>step(1);  au.disabled=cfg.evAmps>=AMPS[AMPS.length-1]; }
@@ -1252,24 +1291,114 @@ function initNow(){
     el.value=cfg[k]; apply(false);
   });
 
-  const cb=document.getElementById('chargeBtn');
-  const paintCharge=()=>{
-    cb.classList.toggle('on',!!cfg.charging);
-    cb.textContent = cfg.charging? 'Nabíjím — běží' : 'Nabíjím';
+  const ca=document.getElementById('calAdd');
+  if(ca) ca.onclick=()=>{
+    const el=document.getElementById('realkwh');
+    const real=parseFloat((el.value||'').replace(',','.'));
+    const msg=document.getElementById('calMsg');
+    if(!(real>0)){ msg.textContent='Zadej skutečnou výrobu v kWh.'; return; }
+    const consAll=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
+    const evAdd=parseFloat((document.getElementById('realev').value||'').replace(',','.'));
+    const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
+    // od celkové spotřeby odečti, co si vzala nabíječka (v autě přibylo méně kvůli ztrátám)
+    const cons=(consAll>0) ? Math.max(0, consAll-(evAdd>0?evAdd/eff:0)) : NaN;
+    const m100=s.total*100/cfg.calib;
+    const prev=calLog.find(x=>x.d===s.date);
+    calLog=calLog.filter(x=>x.d!==s.date);
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    calLog.sort((a,b)=>a.d<b.d?-1:1);
+    el.value='';
+    ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
+    writeHash(); render();
+    const den=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',
+      {weekday:'long',day:'numeric',month:'numeric'});
+    const m2=document.getElementById('calMsg');
+    if(m2) m2.innerHTML=`<span style="color:var(--batt);font-weight:600">Zapsáno — ${den}:</span>
+      model ${f1(s.total)} kWh, skutečnost ${f1(real)} kWh
+      (${real>=s.total?'+':''}${Math.round((real/s.total-1)*100)} %).${
+      cons>0?` Čistá spotřeba domu ${f1(cons)} kWh${evAdd>0?` (z ${f1(consAll)} po odečtení nabíjení)`:''}.`:''}`;
   };
-  paintCharge();
-  cb.onclick=()=>{
-    cfg.charging = cfg.charging?0:1;
-    if(cfg.charging){ cfg.evAmps=6; stateAt=new Date(); refreshClock(); }
-    paintCharge();
+  document.querySelectorAll('.calDel').forEach(el=>el.onclick=()=>{
+    calLog=calLog.filter(x=>x.d!==el.dataset.d); writeHash(); render();
+    const m=document.getElementById('nowMsg');
+    if(m) m.innerHTML='<span style="color:var(--muted)">Den smazán.</span>';
+  });
+  const clr=document.getElementById('calClear');
+  if(clr) clr.onclick=()=>{
+    if(clr.dataset.armed){ calLog=[]; writeHash(); render();
+      const m=document.getElementById('nowMsg');
+      if(m) m.innerHTML='<span style="color:var(--muted)">Kalibrační historie smazána.</span>';
+    } else { clr.dataset.armed='1'; clr.textContent='Opravdu smazat?';
+      clr.style.color='var(--surplus)'; clr.style.borderColor='var(--surplus)';
+      setTimeout(()=>{ if(clr.dataset.armed){ delete clr.dataset.armed;
+        clr.textContent='Vymazat vše'; clr.style.color='var(--muted)';
+        clr.style.borderColor='var(--hair)'; } },4000);
+    }
+  };
+  const setcal=document.getElementById('setcal');
+  if(setcal) setcal.onclick=()=>{
+    cfg.calib=calSuggest(); const el=document.getElementById('calib');
+    if(el) el.value=cfg.calib; writeHash(); render();
+  };
+  const cp=document.getElementById('copy');
+  if(cp) cp.onclick=async e=>{
+    await navigator.clipboard.writeText(document.getElementById('rep').textContent);
+    e.target.textContent='Zkopírováno'; setTimeout(()=>e.target.textContent='Zkopírovat report',1600);
+  };
+}
+
+function buildTabs(){
+  if(!data) return;
+  const last=Math.min(data.daily.time.length,todayIdx+4);
+  document.getElementById('tabs').innerHTML=data.daily.time.slice(0,last).map((t,i)=>{
+    const d=new Date(t+'T12:00:00');
+    const rel=i-todayIdx;
+    const name=rel===0?'dnes':rel===-1?'včera':rel===-2?'předevčírem':d.toLocaleDateString('cs-CZ',{weekday:'short'});
+    const lbl=name+' '+d.toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'});
+    return `<button class="tab${rel<0?' past':''}" role="tab" aria-selected="${i===day}" data-d="${i}">${lbl}</button>`;}).join('');
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ day=+b.dataset.d; render(); });
+}
+
+function initNow(){
+  ['battNow','evSoc','tripCons','roadSoc','roadKm'].forEach(k=>{
+    const el=document.getElementById(k); if(el) el.value=cfg[k];
+  });
+  ['roadSoc','roadKm'].forEach(k=>document.getElementById(k).addEventListener('change',()=>apply(false)));
+  document.getElementById('roadUse').onclick=()=>{
+    if(!(cfg.roadSoc>0)){ document.getElementById('roadOut').textContent='Nejdřív zadej, na kolik procent jsi dobil.'; return; }
+    // stav auta = co je v něm teď u nabíječky; do dnešního řádku zbývající km domů
+    cfg.evSoc=Math.max(0,Math.min(100,Math.round(cfg.roadSoc)));
+    document.getElementById('evSoc').value=cfg.evSoc;
+    const dKm=Math.max(0,Math.round(cfg.roadKm));
+    if(data){
+      const c=dayCfg(data.daily.time[todayIdx]);
+      c.km=dKm; c.done=false; saveDays();
+    }
+    cfg.roadSoc=0; cfg.roadKm=0;
+    document.getElementById('roadSoc').value=0; document.getElementById('roadKm').value=0;
+    stateAt=new Date(); refreshClock();
     apply(true);
     const m=document.getElementById('nowMsg');
-    if(m) m.innerHTML = cfg.charging
-      ? '<span style="color:var(--batt);font-weight:600">Nabíjení běží od '+
-        stateAt.toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})+
-        '</span> — okno se počítá od téhle chvíle.'
-      : 'Nabíjení vypnuto, okna se navrhují od nejbližší čtvrthodiny.';
+    if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Zapsáno:</span> auto '+
+      f0(cfg.evSoc)+' %, do dnešního dne zbývá '+f0(dKm)+' km domů.';
   };
+  document.getElementById('tripCons').addEventListener('change',()=>apply(false));
+  document.getElementById('nowBtn').onclick=()=>{
+    stateAt=new Date(); refreshClock();
+    apply(true);
+    document.getElementById('nowMsg').textContent=
+      'Platné k '+new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})
+      +' — dnešek se počítá od '+String(nowH).padStart(2,'0')+':00.';
+  };
+  document.querySelectorAll('.nstep button').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k, el=document.getElementById(k);
+    const step=parseFloat(b.dataset.step||'1');
+    const mn=parseFloat(b.dataset.min??'0'), mx=parseFloat(b.dataset.max??'100');
+    const v=(parseFloat(el.value)||0)+(+b.dataset.s)*step;
+    cfg[k]=Math.max(mn,Math.min(mx,Math.round(v*10)/10));
+    el.value=cfg[k]; apply(false);
+  });
+
   document.getElementById('nowMsg').textContent=
     'Dnešek se počítá od '+String(nowH).padStart(2,'0')+':00. Po úpravě hodnot dej Přepočítat vše.';
 }
