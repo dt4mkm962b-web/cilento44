@@ -1101,7 +1101,7 @@ function render(){
   const morn=s.hours.filter(x=>x.h<13).reduce((a,x)=>a+x.pv,0);
   const aft =s.hours.filter(x=>x.h>=13).reduce((a,x)=>a+x.pv,0);
   const tilt = morn>aft*1.25 ? 'víc dopoledne' : (aft>morn*1.25 ? 'víc odpoledne' : 'rovnoměrně');
-  const W=s.win, carEnd=s.evStartPct+W.evDone/cfg.evCap*100;
+  const W=s.win;
   const hrsOpt=(from,to,sel)=>{ let o='';
     for(let h=from;h<=to;h++) o+=`<option value="${h}"${h===sel?' selected':''}>${hh(h)}</option>`;
     return o; };
@@ -1148,9 +1148,9 @@ function render(){
         'Dnes už je po slunci'}</b></div>`}
 
       <div class="cb-res">
-        <span><b>${f0(carEnd)} %</b><i>auto na konci okna${
+        <span><b>${f0(s.evEndPct)} %</b><i>auto po nabití${
           W.evDone>0.3?' (+'+f1(W.evDone)+' kWh)':''}</i></span>
-        <span><b>${f0(s.evEndPct)} %</b><i>auto večer${s.work?' · v práci '+f0(s.atWorkPct)+' %':''}</i></span>
+        <span><b>${f0(s.lowPct)} %</b><i>auto nejníž${s.km>0?' · po '+f0(s.km)+' km':''}</i></span>
         <span><b style="color:${W.tooLow?'var(--surplus)':'var(--ink)'}">${f0(W.socEvePct)} %</b>
           <i>baterie 22:00 · rezerva ${f0(cfg.reserve)} %</i></span>
       </div>
@@ -1194,6 +1194,12 @@ function wire(s){
     c.done=!c.done;
     if(c.done){ c.kmDone=c.km||c.kmDone||0; c.km=0; }        // ujeto → km pryč z plánu
     else { c.km=c.kmDone||c.km||0; c.kmDone=0; }             // zpět → vrať je
+    saveDays(); render();
+  });
+  document.querySelectorAll('.daytrip').forEach(el=>el.onclick=()=>{
+    const c=dayCfg(el.dataset.key), km=+el.dataset.km;
+    if(c.km===km) c.km=0;                       // druhé ťuknutí cestu zruší
+    else { c.km=km; c.done=false; }
     saveDays(); render();
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
