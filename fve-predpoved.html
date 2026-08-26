@@ -112,6 +112,16 @@
     letter-spacing:.08em;font-size:10.5px;font-weight:600}
   .weekstrip .wsv{font-family:var(--mono);font-size:13px;font-weight:600}
 
+  .chargebox{margin-top:14px;background:var(--card);border:1px solid var(--hair);
+    border-left:3px solid var(--batt);border-radius:3px;padding:11px 12px}
+  .cb-top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .cb-win b{display:block;font-family:var(--mono);font-size:19px;font-weight:600;line-height:1.15}
+  .cb-win i{font-style:normal;font-size:12px;color:var(--muted)}
+  .cb-res{display:flex;gap:8px;margin-top:10px;padding-top:9px;border-top:1px solid var(--hair)}
+  .cb-res span{flex:1;display:flex;flex-direction:column}
+  .cb-res b{font-family:var(--mono);font-size:16px;font-weight:600;line-height:1.15}
+  .cb-res i{font-style:normal;font-size:10px;color:var(--muted);line-height:1.3}
+  .cb-note{font-size:12px;color:var(--muted);margin:9px 0 0}
   .daylist{border:1px solid var(--hair);border-radius:3px;overflow:hidden;background:var(--card)}
   .dayrow+.dayrow{border-top:1px solid var(--hair)}
   .dayrow.sel{background:#DCE8E1}
@@ -210,11 +220,6 @@
 
   <div class="nowrow" style="margin-top:12px">
     <button class="act" id="chargeBtn" style="margin:0">Nabíjím</button>
-    <div class="stepper" id="ampBox">
-      <button id="ampDown" aria-label="snížit proud">−</button>
-      <span id="ampVal">6 A</span>
-      <button id="ampUp" aria-label="zvýšit proud">+</button>
-    </div>
     <button class="act" id="nowBtn" style="margin:0">Přepočítat vše</button>
   </div>
   <div id="tripInfo" style="margin-top:11px"></div>
@@ -967,10 +972,7 @@ function dayModel(d){
 function render(){
   if(!data) return;
   const clock=refreshClock();
-  if(clock==='reload'){
-    if(!reloading){ reloading=true; load(); }
-    return;
-  }
+  if(clock==='reload'){ if(!reloading){ reloading=true; load(); } return; }
   if(clock==='stale'){
     const m=document.getElementById('nowMsg');
     if(m) m.innerHTML='<span style="color:var(--surplus)">Stav baterií je z '+
@@ -986,20 +988,7 @@ function render(){
     dd.toLocaleDateString('cs-CZ',{weekday:'long',day:'numeric',month:'long'})
     +` · východ ${s.daily.sunrise}, západ ${s.daily.sunset}`;
 
-  const r=s.rec, u=s.use, on = u && u.evDone>0.3, man=!!s.manual;
-
-  const rows=s.opts.map(o=>{
-    const none=o.evDone<=0.3;
-    const any=s.opts.some(x=>x.evDone>0.3);
-    const mark = man ? (o===s.manual?' class="pick"':'') : (o===r&&any?' class="pick rec"':'');
-    return `<tr${mark}><td>${o.amps} A</td>
-      <td>${none?'—':winStart(s,o)+'–'+hh(o.end)}</td>
-      <td>${none?'0':f1(o.evDone)}</td>
-      <td>${f0(s.evEndPct+(o.evDone-(s.use?s.use.evDone:0))/cfg.evCap*100)} %</td>
-      <td>${f0(o.socEvePct)} %</td></tr>`;
-  }).join('');
-
-  // s kolika procenty se vrátíš — bez rezervy, jen holé procento
+  /* --- pruh s dojezdem na nejbližší cesty --- */
   const ti=document.getElementById('tripInfo');
   const ro=document.getElementById('roadOut');
   if(ro){
@@ -1017,7 +1006,6 @@ function render(){
     else{
       const km=horizon.reduce((a,x)=>a+x.km,0);
       const kwh=km*cfg.tripCons/100;
-      // nejnižší bod, kam auto klesne — u dnů s dobitím v práci je to příjezd do práce
       const low=Math.min(...horizon.map(x=>x.lowPct));
       const anyWork=horizon.some(x=>x.work);
       const worst=horizon.find(x=>Math.abs(x.lowPct-low)<0.01);
@@ -1042,8 +1030,9 @@ function render(){
     }
   }
 
+  /* --- minulý den: jen výroba a kalibrace --- */
   if(past){
-    const dn=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',{weekday:'long',day:'numeric',month:'long'});
+    const dn=dd.toLocaleDateString('cs-CZ',{weekday:'long',day:'numeric',month:'long'});
     document.getElementById('out').innerHTML=`
       <div class="headline"><span class="big">${f1(s.total)}</span>
         <span class="unit">kWh — odhad modelu</span></div>
@@ -1052,14 +1041,18 @@ function render(){
       ${band(s)}
       <div class="c" style="margin-top:16px;border-left:3px solid var(--muted)">
         <p style="margin:0">Tohle je <strong>${dn}</strong>, den zpětně. Model ho přepočítal
-        ze skutečně naměřeného počasí, takže je to poctivé srovnání. Nahoře máš odhad předvyplněný —
-        doplň skutečnou výrobu ze Solplanetu a dej Přidat den. Nabíjení se u minulých dnů neřeší.</p>
+        ze skutečně naměřeného počasí, takže je to poctivé srovnání. Nabíjení se u minulých dnů neřeší.</p>
       </div>
       ${calCard(s)}`;
-    wire(s);
-    buildTabs();
-    return;
+    wire(s); buildTabs(); return;
   }
+
+  /* --- dnešek a výhled --- */
+  const morn=s.hours.filter(x=>x.h<13).reduce((a,x)=>a+x.pv,0);
+  const aft =s.hours.filter(x=>x.h>=13).reduce((a,x)=>a+x.pv,0);
+  const tilt = morn>aft*1.25 ? 'víc dopoledne' : (aft>morn*1.25 ? 'víc odpoledne' : 'rovnoměrně');
+  const pick=s.opts.find(o=>o.amps===cfg.evAmps) || s.opts[0];
+  const evAfter=s.evEndPct+((pick?pick.evDone:0)-(s.use?s.use.evDone:0))/cfg.evCap*100;
 
   document.getElementById('out').innerHTML=`
     <div class="headline">
@@ -1067,88 +1060,40 @@ function render(){
       <span class="unit">kWh ${s.today&&s.h0>0?'ještě dnes':'za den'}</span>
       ${s.today&&s.h0>0?`<span class="tot"><span class="totn">${f1(s.total)}</span> kWh celý den</span>`:''}
     </div>
-    ${(data.models>1)?`<div class="range">Modely počasí se rozcházejí: <strong>${
-      f1(s.today&&s.h0>0?s.restLo:s.totalLo)}–${f1(s.today&&s.h0>0?s.restHi:s.totalHi)} kWh</strong>
-      · nabíjení plánuju podle toho horšího</div>`:''}
+    <div class="cond">${WX[s.daily.code]||''} · špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW ·
+      vyrábí <strong>${tilt}</strong> (dopoledne ${f1(morn)}, odpoledne ${f1(aft)} kWh)${
+      (data.models>1)?` · modely ${f1(s.totalLo)}–${f1(s.totalHi)} kWh`:''}</div>
     ${s.today&&s.rest>0.5?`<div class="split">${[
       ['do auta',s.flow.toCar,'var(--sun)'],
       ['do baterie',s.flow.toBatt,'var(--batt)'],
-      ['spotřeba domu',s.flow.toHouse,'var(--draw)'],
-      ['přeteče do sítě',s.flow.exp,'var(--surplus)']
+      ['dům',s.flow.toHouse,'var(--draw)'],
+      ['do sítě',s.flow.exp,'var(--surplus)']
     ].filter(x=>x[1]>0.2).map(x=>`<span><i style="background:${x[2]}"></i>${
       f1(x[1])} kWh ${x[0]}</span>`).join('')}</div>`:''}
-    <div class="cond">${WX[s.daily.code]||''} · ${f0(s.daily.tmin)}–${f0(s.daily.tmax)} °C ·
-      slunce ${f1(s.daily.sun)} z ${f1(s.daily.light)} h · špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW</div>
-    ${band(s)}
-    <div class="cards mini">
-      <div class="c ${s.canCharge?'good':''}">
-        <div class="eyebrow">${cfg.charging?'Nabíjí se':(s.canCharge?'Nabíječka':'Auto')}</div>
-        <div class="v">${!s.canCharge?(s.why==='over'?'pozdě':s.why==='away'?'pryč':'pozdě')
-          :(on? (man&&s.h0<u.start? 'počkej':u.amps+' A')
-              : (s.roomCap<=0.1?'plné':'—'))}</div>
-        <p>${!s.canCharge? (s.why==='away'?'není doma':s.why==='late-back'?'vrací se '+hh(s.back):'po slunci')
-           : (on? (man&&s.h0<u.start? 'zapoj '+hh(u.start) : 'do '+hh(u.end))
-                : (s.roomCap<=0.1?'na stropu':'slunce nestačí'))}</p>
-      </div>
-      <div class="c">
-        <div class="eyebrow">Auto večer</div>
-        <div class="v">${f0(s.evEndPct)} %</div>
-        <p>teď ${f0(s.evStartPct)} %${s.km>0?' · '+f0(s.km)+' km':''}</p>
-      </div>
-      <div class="c ${u.socEvePct>=cfg.reserve-0.5?'good':'warn'}">
-        <div class="eyebrow">Baterie 22:00</div>
-        <div class="v">${f0(u.socEvePct)} %</div>
-        <p>min ${f0(u.minSocPct)} % · rez. ${f0(cfg.reserve)} %</p>
-      </div>
-    </div>
 
-    ${(()=>{
-      // proč to nezačíná hned teď?
-      if(!s.today || s.startAt || !on || u.start<=s.h0) return '';
-      const why=s.whyLater;
-      if(!why) return '';
-      return `<p style="color:var(--muted);margin:12px 0 0">
-        <strong>Proč až od ${hh(u.start)}?</strong> ${why}</p>`;
-    })()}
-    ${(()=>{
-      if(!s.today || !s.startAt || !s.canCharge) return '';
-      const bad=s.opts.filter(o=>o.evDone<=0.3 && o.earliest!==null);
-      const good=s.opts.filter(o=>o.evDone>0.3);
-      if(!good.length){
-        const e=s.opts.map(o=>o.earliest).filter(x=>x!==null).sort((a,b)=>a-b)[0];
-        return `<p style="color:var(--surplus);margin:12px 0 0"><strong>Od ${hh(s.startAt)} to dnes nevyjde.</strong>
-          Slunce zatím nestačí a baterie domu by šla pod ${f0(cfg.dayFloor)} %.
-          ${e!=null?'Nejdřív má smysl začít v '+hh(e)+'.':'Dnes to nevyjde ani později.'}</p>`;
-      }
-      if(bad.length) return `<p style="color:var(--muted);margin:12px 0 0">
-        Od ${hh(s.startAt)} projdou jen nižší proudy. ${bad.map(o=>o.amps+' A'
-        ).join(', ')} by ${bad.length>1?'sahaly':'sahalo'} pod podlahu — ${
-        bad.map(o=>o.amps+' A až od '+hh(o.earliest)).join(', ')}.</p>`;
-      return `<p style="color:var(--batt);margin:12px 0 0">Od ${hh(s.startAt)} to vychází —
-        slunce už utáhne ${good[good.length-1].amps} A bez sáhnutí do rezervy.</p>`;
-    })()}
-    ${man&&s.manual&&s.manual.evDone>0.3&&s.h0<s.manual.start?`<p style="color:var(--surplus);margin:12px 0 0">
-      <strong>Teď ještě nenabíjej.</strong> Slunce zatím nestačí a ${s.manual.amps} A by ti
-      vysávalo domácí baterii. Zapoj v ${hh(s.manual.start)}.</p>`:''}
-
-    <div style="margin-top:18px">
-      <div class="eyebrow" style="margin-bottom:6px">${man?'Kdybys proud změnil':'Který proud zvolit'}</div>
-      <table class="opts"><thead><tr><th>Proud</th><th>Okno</th><th>kWh</th>
-        <th>Auto večer</th><th>Baterie 22:00</th></tr></thead><tbody>${rows}</tbody></table>
-      <p style="font-size:12px;color:var(--muted);margin:8px 0 0">
-        ${!s.opts.some(x=>x.evDone>0.3)
-          ? 'Dnes už se nedá nabíjet z přebytku — všechny varianty vyjdou na nulu.'
-          : man?`Ručně máš zadáno ${s.manual.amps} A. Tabulka ukazuje, co by daly ostatní proudy,
-            kdybys přepnul.`:'Zeleně je varianta, která dostane do auta nejvíc.'}
-        Sloupec <em>Auto večer</em> je stav po nabití${(s.drive||0)>0.1?
-          ' a po odečtení '+f0(s.km)+' km ('+f1(s.drive)+' kWh)':''}${
-          s.work?', včetně dobití v práci na '+f0(s.workTo)+' %':''}, stejně jako v tabulce dnů.
-        Přes den může baterie klesnout až na ${f0(cfg.dayFloor)} % — hlavní je, aby se stihla
-        vrátit nad rezervu ${f0(cfg.reserve)} % do 22:00 a nevznikl nákup ze sítě.</p>
+    <div class="chargebox">
+      <div class="cb-top">
+        <div class="stepper${cfg.charging?' on':''}">
+          <button id="ampDown">−</button><span id="ampVal">${cfg.evAmps} A</span><button id="ampUp">+</button>
+        </div>
+        <div class="cb-win">${
+          !s.canCharge
+          ? `<b>${s.why==='away'?'auto není doma':s.why==='late-back'?'vrací se '+hh(s.back):'dnes už je po slunci'}</b>`
+          : (pick && pick.evDone>0.3
+             ? `<b>${winStart(s,pick)}–${hh(pick.end)}</b><i>${f1(pick.kW)} kW · nabiješ ${f1(pick.evDone)} kWh</i>`
+             : `<b>nenabíjet</b><i>${s.roomCap<=0.1?'auto je na stropu':'slunce dnes nestačí'}</i>`)}
+        </div>
+      </div>
+      <div class="cb-res">
+        <span><b>${f0(evAfter)} %</b><i>auto večer${s.work?' · v práci '+f0(s.atWorkPct)+' %':''}</i></span>
+        <span><b>${f0(pick?pick.socEvePct:s.base.socEvePct)} %</b><i>baterie 22:00 · rezerva ${f0(cfg.reserve)} %</i></span>
+        <span><b>${f0(pick?pick.minSocPct:s.base.minSocPct)} %</b><i>baterie nejníž</i></span>
+      </div>
+      ${s.whyLater&&pick&&pick.evDone>0.3&&pick.start>s.h0?`<p class="cb-note">${s.whyLater}</p>`:''}
     </div>
 
     ${weekTable(wk)}
-
+    ${band(s)}
     ${calCard(s)}
 
     <div style="margin-top:18px">
@@ -1189,6 +1134,15 @@ function wire(s){
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
   }));
   document.querySelectorAll('.dayjump, .ws').forEach(el=>el.onclick=()=>{ day=+el.dataset.d; render(); });
+
+  const AMPS=[6,8,10,12];
+  const step=d=>{
+    const i=AMPS.indexOf(cfg.evAmps), j=Math.max(0,Math.min(AMPS.length-1,(i<0?0:i)+d));
+    cfg.evAmps=AMPS[j]; writeHash(); render();
+  };
+  const ad=document.getElementById('ampDown'), au=document.getElementById('ampUp');
+  if(ad){ ad.onclick=()=>step(-1); ad.disabled=cfg.evAmps<=AMPS[0]; }
+  if(au){ au.onclick=()=>step(1);  au.disabled=cfg.evAmps>=AMPS[AMPS.length-1]; }
 
   const ca=document.getElementById('calAdd');
   if(ca) ca.onclick=()=>{
@@ -1289,23 +1243,6 @@ function initNow(){
       'Platné k '+new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})
       +' — dnešek se počítá od '+String(nowH).padStart(2,'0')+':00.';
   };
-  const AMPS=[6,8,10,12];
-  const av=document.getElementById('ampVal'), ab=document.getElementById('ampBox');
-  const paintAmps=()=>{
-    av.textContent=cfg.evAmps+' A';
-    ab.classList.toggle('on',!!cfg.charging);
-    document.getElementById('ampDown').disabled = cfg.evAmps<=AMPS[0];
-    document.getElementById('ampUp').disabled = cfg.evAmps>=AMPS[AMPS.length-1];
-  };
-  const stepAmps=dir=>{
-    const i=AMPS.indexOf(cfg.evAmps);
-    const j=Math.max(0,Math.min(AMPS.length-1,(i<0?0:i)+dir));
-    cfg.evAmps=AMPS[j]; paintAmps(); writeHash(); render();
-  };
-  document.getElementById('ampDown').onclick=()=>stepAmps(-1);
-  document.getElementById('ampUp').onclick=()=>stepAmps(1);
-  paintAmps();
-
   document.querySelectorAll('.nstep button').forEach(b=>b.onclick=()=>{
     const k=b.dataset.k, el=document.getElementById(k);
     const step=parseFloat(b.dataset.step||'1');
@@ -1324,7 +1261,7 @@ function initNow(){
   cb.onclick=()=>{
     cfg.charging = cfg.charging?0:1;
     if(cfg.charging){ cfg.evAmps=6; stateAt=new Date(); refreshClock(); }
-    paintCharge(); paintAmps();
+    paintCharge();
     apply(true);
     const m=document.getElementById('nowMsg');
     if(m) m.innerHTML = cfg.charging
