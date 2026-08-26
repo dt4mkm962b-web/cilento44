@@ -161,8 +161,6 @@
     cursor:pointer;border:1px solid}
   button.pill.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
   button.pill.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
-  button.pill.daywork{border-style:dashed;border-color:var(--hair);background:#fff;color:var(--muted)}
-  button.pill.daywork.on{border-style:solid;background:#EEE7F5;border-color:var(--draw);color:var(--draw)}
   table.opts button.calDel{background:none;border:none;color:var(--muted);cursor:pointer;
     font-size:14px;padding:2px 6px;line-height:1}
   table.opts button.calDel:hover{color:var(--surplus)}
@@ -220,25 +218,27 @@
       <div class="nstep"><button data-k="evSoc" data-s="-1">−</button>
         <input id="evSoc" type="number" step="1">
         <button data-k="evSoc" data-s="1">+</button></div></div>
-    <div><label for="tripCons">Spotřeba auta (kWh/100 km)</label>
-      <div class="nstep"><button data-k="tripCons" data-s="-1" data-step="0.5" data-min="8" data-max="40">−</button>
-        <input id="tripCons" type="number" step="0.5">
-        <button data-k="tripCons" data-s="1" data-step="0.5" data-min="8" data-max="40">+</button></div></div>
   </div>
+
+  <div class="eyebrow" style="margin-top:13px">Jsem na cestě a dobíjím mimo domov</div>
+  <div class="nowrow">
+    <div><label for="roadSoc">Dobito na (%)</label>
+      <div class="nstep"><button data-k="roadSoc" data-s="-1" data-step="5">−</button>
+        <input id="roadSoc" type="number" step="1">
+        <button data-k="roadSoc" data-s="1" data-step="5">+</button></div></div>
+    <div><label for="roadKm">Zbývá domů (km)</label>
+      <div class="nstep"><button data-k="roadKm" data-s="-1" data-step="10" data-max="999">−</button>
+        <input id="roadKm" type="number" step="10">
+        <button data-k="roadKm" data-s="1" data-step="10" data-max="999">+</button></div></div>
+    <button class="act" id="roadUse" style="margin:0">Zapsat</button>
+  </div>
+  <div id="roadOut" style="font-size:12.5px;margin-top:5px"></div>
+
+  <div id="tripInfo" style="margin-top:11px"></div>
 
   <div class="nowrow" style="margin-top:12px">
     <button class="act" id="nowBtn" style="margin:0">Přepočítat vše</button>
   </div>
-  <div id="tripInfo" style="margin-top:11px"></div>
-  <details id="roadBox" style="margin-top:9px;background:transparent;border:none">
-    <summary style="padding:6px 0;font-size:12px">Jsem na cestě a dobíjím mimo domov</summary>
-    <div class="nowrow" style="padding-bottom:6px">
-      <div><label for="roadSoc">Dobito na (%)</label><input id="roadSoc" type="number" step="1"></div>
-      <div><label for="roadKm">Zbývá domů (km)</label><input id="roadKm" type="number" step="10"></div>
-      <button class="act" id="roadUse" style="margin:0">Použít jako stav auta</button>
-    </div>
-    <div id="roadOut" style="font-size:13px;padding-bottom:4px"></div>
-  </details>
   <div id="nowMsg" style="font-size:12px;color:var(--muted);margin-top:7px"></div>
 </div>
 
@@ -604,8 +604,11 @@ function simulate(d,st){
   const manual = null;
   const use = manual || rec;
   // okno zvolené uživatelem (nebo doporučené, dokud nesáhne)
-  const wf = (today && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (rec&&rec.evDone>0.3?rec.start:evOpen);
-  const wt = (today && cfg.winTo>0) ? Math.min(cfg.winTo,cfg.evTo) : (rec&&rec.evDone>0.3?rec.end:evOpen);
+  // automatické okno musí patřit ke zvolenému proudu, ne k tomu nejlepšímu
+  const optA = opts.find(o=>o.amps===cfg.evAmps) || rec;
+  const autoOk = optA && optA.evDone>0.3;
+  const wf = (today && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
+  const wt = (today && cfg.winTo>0)   ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
   const win = canCharge && wt>wf ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
   win.wf=wf; win.wt=wt;
   win.tooLow = win.socEvePct < cfg.reserve-0.5;
@@ -829,7 +832,7 @@ function ntWindow(dateStr){
 }
 
 // časté cesty — km a jestli se u nich dobíjí v půlce
-const TRIPS=[['Praha',190,80],['Soběslav',50,0],['Tábor',20,0],['Postoupky',500,100]];
+const TRIPS=[['Praha',190],['Soběslav',50],['Tábor',20],['Postoupky',500]];
 const BACK=[[0,'doma celý den'],[10,'doma od 10:00'],[12,'doma od 12:00'],[14,'doma od 14:00'],
   [15,'doma od 15:00'],[16,'doma od 16:00'],[17,'doma od 17:00'],[18,'doma od 18:00'],
   [19,'doma od 19:00'],[24,'PRYČ celý den']];
@@ -862,15 +865,14 @@ function weekTable(wk){
       <div class="derow">
         <input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" inputmode="numeric">
         ${TRIPS.map(t=>`<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}"
-          data-km="${t[1]}" data-work="${t[2]}">${t[0]}</button>`).join('')}
+          data-km="${t[1]}">${t[0]}</button>`).join('')}
       </div>
       <div class="derow">
         <select class="dayback" data-key="${s.date}">${BACK.map(o=>
           `<option value="${o[0]}"${o[0]===s.back?' selected':''}>${o[1]}</option>`).join('')}</select>
         ${s.km>0||s.driven ? `<button class="pill daydone ${s.driven?'done':'todo'}"
           data-key="${s.date}">${s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}
-        ${s.km>0&&!s.driven ? `<button class="pill daywork ${s.work?'on':''}"
-          data-key="${s.date}">${s.work?'⚡ '+f0(s.workTo)+' %':'bez dobití'}</button>`:''}
+
       </div></div>` : '';
 
     return `<div class="dayrow${sel?' sel':''}">
@@ -1013,9 +1015,36 @@ function render(){
       ro.innerHTML=`Po dobití na ${f0(cfg.roadSoc)} % a ${f0(cfg.roadKm)} km domů dorazíš s
         <strong style="color:${home>=cfg.tripArrive?'var(--batt)':'var(--surplus)'}">${f0(home)} %</strong>.
         ${home<0?'To nestačí, budeš muset dobít ještě jednou.'
-          :'Tlačítko zapíše stav auta na '+f0(cfg.roadSoc)+' % a do dnešního dne '+f0(cfg.roadKm)+' km, které tě ještě čekají.'}`;
-    } else ro.innerHTML='Zadej, na kolik procent jsi dobil a kolik kilometrů ti zbývá domů.';
+          :'<em>Zapsat</em> uloží auto na '+f0(cfg.roadSoc)+' % a dnešní zbývající cestu '+f0(cfg.roadKm)+' km.'}`;
+    } else ro.innerHTML='<span style="color:var(--muted)">Zadej, na kolik jsi dobil a kolik km zbývá domů — '+
+      'tlačítko Zapsat to přenese do stavu auta a do dnešních kilometrů.</span>';
   }
+  // velká cesta dál ve výhledu — kdy si ji začít hlídat
+  const bigAhead=()=>{
+    const big=wk.slice(2).find(x=>x.km>=150 && !x.driven);
+    if(!big) return '';
+    const i=wk.indexOf(big);
+    const den=new Date(big.date+'T12:00:00').toLocaleDateString('cs-CZ',{weekday:'long'});
+    const potreba = big.work
+      ? (big.km*Math.max(0,Math.min(100,cfg.workSplit))/100)*cfg.tripCons/100/cfg.evCap*100 + cfg.tripArrive
+      : big.km*cfg.tripCons/100/cfg.evCap*100 + cfg.tripArrive;
+    const rano = big.evStartPct;
+    const chybi = potreba - rano;
+    const pred = wk[i-1];
+    const predDen = new Date(pred.date+'T12:00:00').toLocaleDateString('cs-CZ',{weekday:'long'});
+    return `<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--hair);
+      font-size:12px;color:${chibiCol(chybi)}">
+      <strong>${den} tě čeká ${f0(big.km)} km.</strong>
+      Potřebuješ ráno ${f0(potreba)} %${big.work?' (do práce a s rezervou)':''}, model počítá s ${f0(rano)} %.
+      ${chybi>0.5
+        ? `Chybí ${f0(chibiAbs(chybi))} % — ${pred.work
+            ? predDen+' dobij v práci na 100 %, jinak to doma nedoženeš.'
+            : 'dobij '+predDen+' v noci v nízkém tarifu nebo si nech víc ze slunce.'}`
+        : 'Vychází to.'}</div>`;
+  };
+  const chibiCol=v=>v>0.5?'var(--surplus)':'var(--muted)';
+  const chibiAbs=v=>Math.max(0,v);
+
   if(ti){
     const horizon=wk.slice(0,2).filter(x=>x.km>0 && !x.driven);
     if(!horizon.length){ ti.innerHTML=''; }
@@ -1042,6 +1071,7 @@ function render(){
             :(low<cfg.tripArrive?` — dojedeš, ale s malou rezervou.`:'.'))}
           <br>Doma budeš mít po ${horizon.length>1?'zítřejší':'té'} cestě
           <strong>${f0(horizon[horizon.length-1].evEndPct)} %</strong>.</div>
+        ${bigAhead()}
       </div>`;
     }
   }
@@ -1129,6 +1159,18 @@ function render(){
     ${band(s)}
     ${calCard(s)}
 
+    <div class="c" style="margin-top:18px">
+      <div class="eyebrow">Spotřeba auta</div>
+      <div class="nowrow" style="margin-top:7px">
+        <div><label for="tripCons">kWh na 100 km</label>
+          <div class="nstep"><button data-k="tripCons" data-s="-1" data-step="0.5" data-min="8" data-max="40">−</button>
+            <input id="tripCons" type="number" step="0.5" value="${cfg.tripCons}">
+            <button data-k="tripCons" data-s="1" data-step="0.5" data-min="8" data-max="40">+</button></div></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:7px 0 0">Přepočítává všechny jízdy.
+        V zimě bývá o 4–5 kWh vyšší než v létě.</p>
+    </div>
+
     <div style="margin-top:18px">
       <div class="eyebrow" style="margin-bottom:6px">Report ke zkopírování</div>
       <pre class="report" id="rep">${report(s)}</pre>
@@ -1150,19 +1192,6 @@ function wire(s){
     else { c.km=c.kmDone||c.km||0; c.kmDone=0; }             // zpět → vrať je
     saveDays(); render();
   });
-  const WORK=[0,80,100];
-  document.querySelectorAll('.daytrip').forEach(el=>el.onclick=()=>{
-    const c=dayCfg(el.dataset.key), km=+el.dataset.km;
-    if(c.km===km){ c.km=0; c.workTo=0; }        // druhé ťuknutí cestu zruší
-    else { c.km=km; c.workTo=+el.dataset.work; c.done=false; }
-    saveDays(); render();
-  });
-  document.querySelectorAll('.daywork').forEach(el=>el.onclick=()=>{
-    const c=dayCfg(el.dataset.key);
-    const i=WORK.indexOf(c.workTo||0);
-    c.workTo=WORK[(i<0?0:i+1)%WORK.length];
-    delete c.work; saveDays(); render();
-  });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
   }));
@@ -1173,6 +1202,21 @@ function wire(s){
     const i=AMPS.indexOf(cfg.evAmps), j=Math.max(0,Math.min(AMPS.length-1,(i<0?0:i)+d));
     cfg.evAmps=AMPS[j]; writeHash(); render();
   };
+  document.querySelectorAll('.nstep button').forEach(b=>{ if(b.dataset.wired) return;
+    b.dataset.wired='1';
+    b.onclick=()=>{
+      const k=b.dataset.k, el=document.getElementById(k);
+      const st=parseFloat(b.dataset.step||'1');
+      const mn=parseFloat(b.dataset.min??'0'), mx=parseFloat(b.dataset.max??'100');
+      const v=(parseFloat(el.value)||0)+(+b.dataset.s)*st;
+      cfg[k]=Math.max(mn,Math.min(mx,Math.round(v*10)/10));
+      el.value=cfg[k]; apply(false);
+    };
+  });
+  const tc=document.getElementById('tripCons');
+  if(tc && !tc.dataset.wired){ tc.dataset.wired='1';
+    tc.addEventListener('change',()=>apply(false)); }
+
   const wfEl=document.getElementById('winFrom'), wtEl=document.getElementById('winTo');
   if(wfEl) wfEl.onchange=()=>{ cfg.winFrom=+wfEl.value;
     if(cfg.winTo<=cfg.winFrom) cfg.winTo=Math.min(cfg.evTo,cfg.winFrom+1);
@@ -1255,7 +1299,7 @@ function buildTabs(){
 }
 
 function initNow(){
-  ['battNow','evSoc','tripCons','roadSoc','roadKm'].forEach(k=>{
+  ['battNow','evSoc','roadSoc','roadKm'].forEach(k=>{
     const el=document.getElementById(k); if(el) el.value=cfg[k];
   });
   ['roadSoc','roadKm'].forEach(k=>document.getElementById(k).addEventListener('change',()=>apply(false)));
@@ -1270,6 +1314,7 @@ function initNow(){
       c.km=dKm; c.done=false; saveDays();
     }
     cfg.roadSoc=0; cfg.roadKm=0;
+    cfg.winFrom=-1; cfg.winTo=-1;              // okno znovu podle modelu
     document.getElementById('roadSoc').value=0; document.getElementById('roadKm').value=0;
     stateAt=new Date(); refreshClock();
     apply(true);
@@ -1277,7 +1322,6 @@ function initNow(){
     if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Zapsáno:</span> auto '+
       f0(cfg.evSoc)+' %, do dnešního dne zbývá '+f0(dKm)+' km domů.';
   };
-  document.getElementById('tripCons').addEventListener('change',()=>apply(false));
   document.getElementById('nowBtn').onclick=()=>{
     stateAt=new Date(); refreshClock();
     apply(true);
@@ -1363,7 +1407,7 @@ function buildTabs(){
 }
 
 function initNow(){
-  ['battNow','evSoc','tripCons','roadSoc','roadKm'].forEach(k=>{
+  ['battNow','evSoc','roadSoc','roadKm'].forEach(k=>{
     const el=document.getElementById(k); if(el) el.value=cfg[k];
   });
   ['roadSoc','roadKm'].forEach(k=>document.getElementById(k).addEventListener('change',()=>apply(false)));
@@ -1378,6 +1422,7 @@ function initNow(){
       c.km=dKm; c.done=false; saveDays();
     }
     cfg.roadSoc=0; cfg.roadKm=0;
+    cfg.winFrom=-1; cfg.winTo=-1;              // okno znovu podle modelu
     document.getElementById('roadSoc').value=0; document.getElementById('roadKm').value=0;
     stateAt=new Date(); refreshClock();
     apply(true);
@@ -1385,7 +1430,6 @@ function initNow(){
     if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Zapsáno:</span> auto '+
       f0(cfg.evSoc)+' %, do dnešního dne zbývá '+f0(dKm)+' km domů.';
   };
-  document.getElementById('tripCons').addEventListener('change',()=>apply(false));
   document.getElementById('nowBtn').onclick=()=>{
     stateAt=new Date(); refreshClock();
     apply(true);
