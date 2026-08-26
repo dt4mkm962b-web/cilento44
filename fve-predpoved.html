@@ -903,9 +903,13 @@ function weekTable(wk){
     const nt=ntWindow(prev?prev.date:s0.date);
     const kw10=10*cfg.evPhases*0.23, kw16=16*cfg.evPhases*0.23;
     const t=x=>{ const v=s0.short/x; return v<1?Math.round(v*60)+' min':f1(v)+' h'; };
-    advice=`<p style="margin:10px 0 0"><strong>${dn(s0.date)}:</strong> na ${f0(s0.km)} km ti chybí
-      <strong>${f1(s0.short)} kWh</strong>. Dobij v nízkém tarifu ${hh(nt.start)}–${hh(nt.end)}:
-      ${t(kw10)} při 10 A, nebo ${t(kw16)} při 16 A.</p>`;
+    const nedojede = s0.evEndPct<0;
+    advice=`<p style="margin:10px 0 0"><strong>${dn(s0.date)}:</strong> ${nedojede
+      ? `na ${f0(s0.km)} km <strong>nedojedeš</strong> — chybí ${f1(s0.short)} kWh.`
+      : `po ${f0(s0.km)} km skončíš na <strong>${f0(s0.evEndPct)} %</strong>, což je pod tvým
+         minimem ${f0(cfg.tripArrive)} %. Do rezervy chybí ${f1(s0.short)} kWh.`}
+      Dobij ${prev?'v noci na '+dn(s0.date).split(' ')[0]:'dnes v noci'} v nízkém tarifu
+      ${hh(nt.start)}–${hh(nt.end)}: ${t(kw10)} při 10 A, nebo ${t(kw16)} při 16 A.</p>`;
   } else {
     advice=`<p style="margin:10px 0 0;color:var(--batt)">Celý výhled vyjde ze slunce, ze sítě dobíjet nemusíš.</p>`;
   }
