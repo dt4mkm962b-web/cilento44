@@ -105,22 +105,46 @@
     cursor:pointer;display:block;width:100%;margin-top:5px;border:1px solid}
   table.opts button.daydone.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
   table.opts button.daydone.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
-  .weekstrip{display:flex;gap:3px;margin-bottom:8px}
+  .weekstrip{display:flex;gap:3px;margin-bottom:9px}
   .weekstrip .ws{flex:1;border:none;border-radius:2px;padding:7px 4px 6px;cursor:pointer;
     display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--ink)}
   .weekstrip .wsd{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
     letter-spacing:.08em;font-size:10.5px;font-weight:600}
   .weekstrip .wsv{font-family:var(--mono);font-size:13px;font-weight:600}
-  table.opts .trips{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
-  table.opts button.daytrip{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
-    letter-spacing:.05em;font-size:10px;font-weight:600;padding:3px 6px;border-radius:2px;
-    cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--muted);flex:1 1 auto}
-  table.opts button.daytrip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
-  table.opts button.daywork{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
-    letter-spacing:.07em;font-size:10.5px;font-weight:600;padding:4px 8px;border-radius:999px;
-    cursor:pointer;display:block;width:100%;margin-top:4px;border:1px dashed var(--hair);
-    background:#fff;color:var(--muted)}
-  table.opts button.daywork.on{background:#EEE7F5;border:1px solid var(--draw);color:var(--draw)}
+
+  .daylist{border:1px solid var(--hair);border-radius:3px;overflow:hidden;background:var(--card)}
+  .dayrow+.dayrow{border-top:1px solid var(--hair)}
+  .dayrow.sel{background:#DCE8E1}
+  button.dayjump{display:grid;width:100%;text-align:left;border:none;background:none;cursor:pointer;
+    padding:9px 11px;gap:2px 10px;align-items:baseline;color:var(--ink);
+    grid-template-columns:1fr auto auto auto}
+  .dr-d{grid-column:1;font-family:'Barlow Condensed',sans-serif;font-size:14px;letter-spacing:.02em}
+  .dr-d b{text-transform:uppercase;font-weight:600}
+  .dr-t{grid-column:1;grid-row:2;font-size:11.5px;color:var(--muted)}
+  .dr-s{grid-column:1;grid-row:3;font-size:11.5px;color:var(--batt);font-family:var(--mono)}
+  .dr-n{display:flex;flex-direction:column;align-items:flex-end;grid-row:1/4;justify-content:center}
+  .dr-n b{font-family:var(--mono);font-size:15px;font-weight:600;line-height:1.1}
+  .dr-n i{font-style:normal;font-size:9.5px;color:var(--muted);letter-spacing:.02em;text-align:right}
+  @media (max-width:430px){
+    button.dayjump{grid-template-columns:1fr auto auto}
+    .dr-n:nth-of-type(2){display:none}
+  }
+
+  .dayedit{padding:2px 11px 11px;display:flex;flex-direction:column;gap:6px}
+  .derow{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+  .derow input[type=number]{width:64px;padding:6px 6px;text-align:center}
+  .derow select{width:auto;flex:1 1 130px;padding:6px}
+  button.daytrip{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
+    letter-spacing:.05em;font-size:11px;font-weight:600;padding:6px 9px;border-radius:2px;
+    cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--muted)}
+  button.daytrip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+  button.pill{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
+    letter-spacing:.07em;font-size:11px;font-weight:600;padding:6px 12px;border-radius:999px;
+    cursor:pointer;border:1px solid}
+  button.pill.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
+  button.pill.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
+  button.pill.daywork{border-style:dashed;border-color:var(--hair);background:#fff;color:var(--muted)}
+  button.pill.daywork.on{border-style:solid;background:#EEE7F5;border-color:var(--draw);color:var(--draw)}
   table.opts button.calDel{background:none;border:none;color:var(--muted);cursor:pointer;
     font-size:14px;padding:2px 6px;line-height:1}
   table.opts button.calDel:hover{color:var(--surplus)}
@@ -792,94 +816,84 @@ function weekTable(wk){
   const dd=d=>new Date(d+'T12:00:00');
   const dn=d=>dd(d).toLocaleDateString('cs-CZ',{weekday:'long'})+' '+
               dd(d).toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'});
-  const cell=(d,i)=>`<span class="dw">${i===0?'dnes':dd(d).toLocaleDateString('cs-CZ',{weekday:'long'})}</span>
-    <span class="dd">${dd(d).toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'})}</span>`;
+
+  const mx=Math.max(10,...wk.map(x=>x.total));
+  const strip=`<div class="weekstrip">${wk.map((x,i)=>{
+    const f=Math.max(0.08,Math.min(1,x.total/mx));
+    return `<button class="ws" data-d="${todayIdx+i}" style="background:
+      rgba(217,146,43,${(0.15+0.85*f).toFixed(2)})">
+      <span class="wsd">${i===0?'dnes':dd(x.date).toLocaleDateString('cs-CZ',{weekday:'short'})}</span>
+      <span class="wsv">${f1(x.total)}</span></button>`;}).join('')}</div>`;
+
   const rows=wk.map((s,i)=>{
-    const sel=(todayIdx+i)===day;
-    const warn=s.short>0.2;
-    const evCls=warn?'style="color:var(--surplus);font-weight:600"':'';
-    return `<tr${sel?' class="pick"':''}>
-      <td><button class="dayjump" data-d="${todayIdx+i}">${cell(s.date,i)}</button></td>
-      <td><input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" style="width:58px;padding:4px 5px">
-        <div class="trips">${TRIPS.map(t=>
-          `<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}" data-km="${t[1]}"
-            data-work="${t[2]}">${t[0]}</button>`).join('')}</div>
-        ${(todayIdx+i)===todayIdx && (s.km>0 || s.driven)
-          ? `<button class="daydone ${s.driven?'done':'todo'}" data-key="${s.date}">${
-              s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}
-        ${s.km>0 && !s.driven
-          ? `<button class="daywork ${s.work?'on':''}" data-key="${s.date}">${
-              s.work?'⚡ práce '+f0(s.workTo)+' %':'bez dobití'}</button>`:''}</td>
-      <td><select class="dayback" data-key="${s.date}" style="width:118px;padding:4px 5px;font-size:12px${
-  s.back>=24?';color:var(--surplus);font-weight:600':''}">${
-        BACK.map(o=>`<option value="${o[0]}"${o[0]===s.back?' selected':''}>${o[1]}</option>`).join('')
-      }</select></td>
-      <td>${(()=>{
-        const chg=s.use.evDone, drv=s.drive, net=chg-drv;
-        const why=!s.canCharge?(s.why==='away'?'pryč':s.why==='late-back'?'vrací se pozdě':'po slunci')
-                 :(chg<=0.1?(s.roomCap<=0.1?'auto plné':'nezbylo slunce'):'');
-        if(Math.abs(net)<0.1 && !why) return '—';
-        const big = Math.abs(net)<0.05 ? '<span class="net">0</span>'
-          : `<span class="net" style="color:${net>0?'var(--batt)':'var(--surplus)'}">${
-             net>0?'+':'−'}${f1(Math.abs(net))}</span>`;
-        const parts=[];
-        if(s.work && s.workAdd>0.1) parts.push(
-          `<span style="color:var(--draw)">+${f1(s.workAdd)} v práci</span>`);
-        if(chg>0.1) parts.push(`<span style="color:var(--batt)">+${f1(chg)} nabito</span>`);
-        if(drv>0.1) parts.push(`<span style="color:var(--surplus)">−${f1(drv)} ujeto</span>`);
-        if(!parts.length && why) parts.push(why);
-        else if(why) parts.push(why);
-        if(s.driven) parts.push('km už za tebou');
-        return big+`<span class="dd">${parts.join('<br>')}</span>`;
-      })()}</td>
-      <td ${evCls}>${f0(s.evEndPct)} %${s.work
-        ?`<span class="dd">v práci ${f0(s.atWorkPct)} %</span>`:''}</td>
-      <td>${f0(s.use.socEvePct)} %</td></tr>`;
+    const idx=todayIdx+i, sel=idx===day;
+    const chg=s.use.evDone, drv=s.drive, net=chg-drv;
+    const trip=TRIPS.find(t=>t[1]===s.km);
+    const popis = s.km>0
+      ? `${f0(s.km)} km${trip?' · '+trip[0]:''}${s.work?' · ⚡ '+f0(s.workTo)+' %':''}${s.driven?' · ujeto':''}`
+      : (s.driven?'ujeto':'bez jízdy');
+    const stav = !s.canCharge
+      ? (s.why==='away'?'auto pryč':s.why==='late-back'?'vrací se '+hh(s.back):'po slunci')
+      : (chg>0.1? s.use.amps+' A '+winStart(s,s.use)+'–'+hh(s.use.end)
+        : (s.roomCap<=0.1?'auto plné':'nenabíjet'));
+
+    const edit = sel ? `<div class="dayedit">
+      <div class="derow">
+        <input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" inputmode="numeric">
+        ${TRIPS.map(t=>`<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}"
+          data-km="${t[1]}" data-work="${t[2]}">${t[0]}</button>`).join('')}
+      </div>
+      <div class="derow">
+        <select class="dayback" data-key="${s.date}">${BACK.map(o=>
+          `<option value="${o[0]}"${o[0]===s.back?' selected':''}>${o[1]}</option>`).join('')}</select>
+        ${s.km>0||s.driven ? `<button class="pill daydone ${s.driven?'done':'todo'}"
+          data-key="${s.date}">${s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}
+        ${s.km>0&&!s.driven ? `<button class="pill daywork ${s.work?'on':''}"
+          data-key="${s.date}">${s.work?'⚡ '+f0(s.workTo)+' %':'bez dobití'}</button>`:''}
+      </div></div>` : '';
+
+    return `<div class="dayrow${sel?' sel':''}">
+      <button class="dayjump" data-d="${idx}">
+        <span class="dr-d"><b>${i===0?'dnes':dd(s.date).toLocaleDateString('cs-CZ',{weekday:'long'})}</b>
+          ${dd(s.date).toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'})}</span>
+        <span class="dr-t">${popis}</span>
+        <span class="dr-s">${stav}</span>
+        <span class="dr-n">
+          <b style="color:${net>0?'var(--batt)':(net<-0.05?'var(--surplus)':'var(--muted)')}">${
+            Math.abs(net)<0.05?'0':(net>0?'+':'−')+f1(Math.abs(net))}</b>
+          <i>kWh do auta</i></span>
+        <span class="dr-n"><b>${f0(s.evEndPct)} %</b><i>auto večer${
+          s.work?' · v práci '+f0(s.atWorkPct)+' %':''}</i></span>
+        <span class="dr-n"><b>${f0(s.use.socEvePct)} %</b><i>baterie 22:00</i></span>
+      </button>${edit}</div>`;
   }).join('');
 
   const susp=wk.filter(s=>s.km>=100 && s.back<12);
   const hint=susp.length? `<p style="font-size:12px;color:var(--surplus);margin:8px 0 0">
     U ${susp.map(x=>dn(x.date)).join(', ')} máš přes 100 km a auto vedené doma celý den —
-    pokud jsi s ním pryč, nastav hodinu návratu, jinak ti model naslibuje nabíjení, které neproběhne.</p>`:'';
+    pokud jsi s ním pryč, nastav hodinu návratu.</p>`:'';
 
   const trouble=wk.filter(s=>s.short>0.2);
   let advice='';
   if(trouble.length){
-    const s0=trouble[0], i=wk.indexOf(s0);
-    const prev=wk[i-1];
+    const s0=trouble[0], i=wk.indexOf(s0), prev=wk[i-1];
     const nt=ntWindow(prev?prev.date:s0.date);
     const kw10=10*cfg.evPhases*0.23, kw16=16*cfg.evPhases*0.23;
     const t=x=>{ const v=s0.short/x; return v<1?Math.round(v*60)+' min':f1(v)+' h'; };
     advice=`<p style="margin:10px 0 0"><strong>${dn(s0.date)}:</strong> na ${f0(s0.km)} km ti chybí
-      <strong>${f1(s0.short)} kWh</strong> — auto by skončilo na ${f0(s0.evEndPct)} % místo ${f0(cfg.tripArrive)} %.
-      Dobij ze sítě v nízkém tarifu ${prev?'v noci na '+dn(s0.date):'dnes v noci'}
-      (${hh(nt.start)}–${hh(nt.end)}): ${t(kw10)} při 10 A, nebo ${t(kw16)} při 16 A.</p>`;
+      <strong>${f1(s0.short)} kWh</strong>. Dobij v nízkém tarifu ${hh(nt.start)}–${hh(nt.end)}:
+      ${t(kw10)} při 10 A, nebo ${t(kw16)} při 16 A.</p>`;
   } else {
-    advice=`<p style="margin:10px 0 0;color:var(--batt)">Celý týden vyjde ze slunce, ze sítě dobíjet nemusíš.</p>`;
+    advice=`<p style="margin:10px 0 0;color:var(--batt)">Celý výhled vyjde ze slunce, ze sítě dobíjet nemusíš.</p>`;
   }
-
-  const mx=Math.max(10,...wk.map(x=>x.total));
-  const strip=`<div class="weekstrip">${wk.map((x,i)=>{
-    const f=Math.max(0.08,Math.min(1,x.total/mx));
-    const d=dd(x.date);
-    return `<button class="ws" data-d="${todayIdx+i}" style="background:
-      rgba(217,146,43,${(0.15+0.85*f).toFixed(2)})">
-      <span class="wsd">${i===0?'dnes':d.toLocaleDateString('cs-CZ',{weekday:'short'})}</span>
-      <span class="wsv">${f1(x.total)}</span></button>`;}).join('')}</div>`;
 
   return `<div style="margin-top:18px">
     <div class="eyebrow" style="margin-bottom:6px">Čtyři dny dopředu</div>
     ${strip}
-    <table class="opts"><thead><tr><th>Den</th><th>km</th><th>Auto doma</th>
-      <th>Auto ± kWh</th><th>Auto večer</th><th>Baterie 22:00</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="daylist">${rows}</div>
     <p style="font-size:12px;color:var(--muted);margin:8px 0 0">
-      U každého dne zadej kilometry a od kolika je auto doma. Před návratem se nenabíjí — a když
-      auto chybí celý den, baterie domu vyjede na 100 %, takže další ráno může nabíjení začít dřív.
-      Stav auta i baterie se řetězí ze dne na den. U dneška přepni <em>ještě pojedu</em> na
-      <em>ujeto</em>, jakmile cestu máš za sebou — kilometry se z plánu odečtou.
-      Placka <em>bez dobití</em> cykluje na 80 a 100 %, když můžeš dobít v půlce cesty.
-      Tlačítka s názvy cest vyplní kilometry i dobíjení naráz; druhým ťuknutím cestu zrušíš.</p>${hint}
-    ${advice}
+      Ťukni na den a rozbalí se jeho nastavení — kilometry, časté cesty, kdy je auto doma.</p>
+    ${hint}${advice}
   </div>`;
 }
 
