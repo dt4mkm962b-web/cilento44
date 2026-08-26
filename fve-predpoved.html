@@ -18,6 +18,7 @@
     --sun-soft:#F0C97E;
     --batt:#2C7A68;
     --draw:#8A7BB5;
+    --car:#2E5E8C;
     --surplus:#BF4E1B;
     --mono:'IBM Plex Mono',ui-monospace,monospace;
   }
@@ -104,6 +105,12 @@
     cursor:pointer;display:block;width:100%;margin-top:5px;border:1px solid}
   table.opts button.daydone.todo{background:#F7E4DC;border-color:var(--surplus);color:var(--surplus)}
   table.opts button.daydone.done{background:#DCE8E1;border-color:var(--batt);color:var(--batt)}
+  .weekstrip{display:flex;gap:3px;margin-bottom:8px}
+  .weekstrip .ws{flex:1;border:none;border-radius:2px;padding:7px 4px 6px;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--ink)}
+  .weekstrip .wsd{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
+    letter-spacing:.08em;font-size:10.5px;font-weight:600}
+  .weekstrip .wsv{font-family:var(--mono);font-size:13px;font-weight:600}
   table.opts .trips{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
   table.opts button.daytrip{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
     letter-spacing:.05em;font-size:10px;font-weight:600;padding:3px 6px;border-radius:2px;
@@ -605,6 +612,7 @@ function week(){
   for(let k=0;k<n;k++){
     const d=todayIdx+k;
     const dc=dayCfg(data.daily.time[d]);
+    const dc0=dc;
     const s=simulate(d,{batt,ev,h0:(d===todayIdx?nowH:0),startFrac:(d===todayIdx?nowFrac:0),
       back:dc.back,charging:(d===todayIdx?cfg.charging:0)});
     s.km=dc.km; s.back=dc.back;
@@ -633,6 +641,28 @@ function week(){
     }
     s.evEndKWh=evEnd; s.evEndPct=evEnd/cfg.evCap*100;
     s.lowPct=low/cfg.evCap*100;
+
+    // průběh nabití auta po hodinách — jízdy jako schody, nabíjení jako náběh
+    (function(){
+      const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
+      const away=dc.back>0;
+      const depart = away?Math.max(5,cfg.evFrom-1):12;
+      const back   = (dc.back>0&&dc.back<24)?dc.back:20;
+      const workH  = Math.max(depart+1,Math.min(back-1,Math.round((depart+back)/2)));
+      const leg1   = s.work ? s.drive*Math.max(0,Math.min(100,cfg.workSplit))/100 : s.drive;
+      const leg2   = s.work ? s.drive-leg1 : 0;
+      const target = s.work ? s.workTo/100*cfg.evCap : 0;
+      let car=ev;
+      s.carPct=s.use.hours.map(x=>{
+        if(x.past) return car/cfg.evCap*100;
+        if(x.h===depart && s.drive>0) car-=leg1;
+        if(s.work && x.h===workH) car=Math.max(car,Math.min(target,cfg.evCap));
+        if(s.work && x.h===back && leg2>0) car-=leg2;
+        car+=(x.evP||0)*eff;
+        return Math.max(0,Math.min(100,car/cfg.evCap*100));
+      });
+    })();
+
     const needKWh=cfg.tripArrive/100*cfg.evCap;
     s.short=Math.max(0,needKWh-evEnd);
     batt=s.use.endBatt;
@@ -672,6 +702,9 @@ function band(s){
   const socH=(charging?s.rec.hours:s.base.hours).filter(x=>!x.past);
   const off=hs.length-socH.length;
   const socPath=socH.map((x,i)=>`${i?'L':'M'}${padL+(i+off)*bw+bw/2},${yp(x.soc/cfg.battCap*100)}`).join(' ');
+  const carPath=(s.carPct&&s.carPct.length)
+    ? hs.map((x,i)=>(x.past?null:`${padL+i*bw+bw/2},${yp(s.carPct[i])}`))
+        .filter(Boolean).map((p,i)=>(i?'L':'M')+p).join(' ') : '';
   const resLine=`<line x1="${padL}" y1="${yp(cfg.reserve)}" x2="${W-padR}" y2="${yp(cfg.reserve)}"
     stroke="var(--batt)" stroke-width="1" stroke-dasharray="2 4" opacity=".7"/>
     <text x="${W-padR+4}" y="${yp(cfg.reserve)+3}" font-size="9.5" font-family="IBM Plex Mono"
@@ -693,6 +726,8 @@ function band(s){
     ${gl}${glR}${evBand}${bars}${resLine}
     <path d="${loadPath}" fill="none" stroke="var(--draw)" stroke-width="1.8"/>
     <path d="${socPath}" fill="none" stroke="var(--batt)" stroke-width="2"/>
+    ${carPath?`<path d="${carPath}" fill="none" stroke="var(--car)" stroke-width="2"
+      stroke-dasharray="1 0" opacity=".95"/>`:''}
     ${ticks}
     <text x="${padL-5}" y="${padT-1}" text-anchor="end" font-size="9" font-family="IBM Plex Mono" fill="#5D6B64">kW</text>
     <text x="${W-padR+4}" y="${padT-1}" font-size="9" font-family="IBM Plex Mono" fill="var(--batt)">%</text>
@@ -701,7 +736,8 @@ function band(s){
       <span><i class="key" style="background:var(--sun)"></i>výroba (přebytek)</span>
       <span><i class="key" style="background:var(--sun);opacity:.25"></i>optimistický model</span>
       <span><i class="key" style="background:var(--draw)"></i>spotřeba domu (kW)</span>
-      <span><i class="key" style="background:var(--batt)"></i>SOC baterie (%)</span>
+      <span><i class="key" style="background:var(--batt)"></i>baterie domu (%)</span>
+      <span><i class="key" style="background:var(--sun)"></i>baterie auta (%)</span>
       ${s.today?'<span><i class="key" style="background:#D8DEDA"></i>už proběhlo</span>':''}
     </div></div>`;
 }
@@ -748,7 +784,7 @@ function ntWindow(dateStr){
 }
 
 // časté cesty — km a jestli se u nich dobíjí v půlce
-const TRIPS=[['Praha',190,80],['Tchýně',50,0],['Tábor',20,0],['Morava',500,100]];
+const TRIPS=[['Praha',190,80],['Soběslav',50,0],['Tábor',20,0],['Postoupky',500,100]];
 const BACK=[[0,'doma celý den'],[10,'doma od 10:00'],[12,'doma od 12:00'],[14,'doma od 14:00'],
   [15,'doma od 15:00'],[16,'doma od 16:00'],[17,'doma od 17:00'],[18,'doma od 18:00'],
   [19,'doma od 19:00'],[24,'PRYČ celý den']];
@@ -822,8 +858,18 @@ function weekTable(wk){
     advice=`<p style="margin:10px 0 0;color:var(--batt)">Celý týden vyjde ze slunce, ze sítě dobíjet nemusíš.</p>`;
   }
 
+  const mx=Math.max(10,...wk.map(x=>x.total));
+  const strip=`<div class="weekstrip">${wk.map((x,i)=>{
+    const f=Math.max(0.08,Math.min(1,x.total/mx));
+    const d=dd(x.date);
+    return `<button class="ws" data-d="${todayIdx+i}" style="background:
+      rgba(217,146,43,${(0.15+0.85*f).toFixed(2)})">
+      <span class="wsd">${i===0?'dnes':d.toLocaleDateString('cs-CZ',{weekday:'short'})}</span>
+      <span class="wsv">${f1(x.total)}</span></button>`;}).join('')}</div>`;
+
   return `<div style="margin-top:18px">
     <div class="eyebrow" style="margin-bottom:6px">Čtyři dny dopředu</div>
+    ${strip}
     <table class="opts"><thead><tr><th>Den</th><th>km</th><th>Auto doma</th>
       <th>Auto ± kWh</th><th>Auto večer</th><th>Baterie 22:00</th></tr></thead><tbody>${rows}</tbody></table>
     <p style="font-size:12px;color:var(--muted);margin:8px 0 0">
@@ -935,7 +981,7 @@ function render(){
     return `<tr${mark}><td>${o.amps} A</td>
       <td>${none?'—':winStart(s,o)+'–'+hh(o.end)}</td>
       <td>${none?'0':f1(o.evDone)}</td>
-      <td>${f0((s.evNow+o.evDone-(s.drive||0))/cfg.evCap*100)} %</td>
+      <td>${f0(s.evEndPct+(o.evDone-(s.use?s.use.evDone:0))/cfg.evCap*100)} %</td>
       <td>${f0(o.socEvePct)} %</td></tr>`;
   }).join('');
 
@@ -1081,7 +1127,8 @@ function render(){
           : man?`Ručně máš zadáno ${s.manual.amps} A. Tabulka ukazuje, co by daly ostatní proudy,
             kdybys přepnul.`:'Zeleně je varianta, která dostane do auta nejvíc.'}
         Sloupec <em>Auto večer</em> je stav po nabití${(s.drive||0)>0.1?
-          ' a po odečtení '+f0(s.km)+' km ('+f1(s.drive)+' kWh)':''}, stejně jako v kartě nahoře.
+          ' a po odečtení '+f0(s.km)+' km ('+f1(s.drive)+' kWh)':''}${
+          s.work?', včetně dobití v práci na '+f0(s.workTo)+' %':''}, stejně jako v tabulce dnů.
         Přes den může baterie klesnout až na ${f0(cfg.dayFloor)} % — hlavní je, aby se stihla
         vrátit nad rezervu ${f0(cfg.reserve)} % do 22:00 a nevznikl nákup ze sítě.</p>
     </div>
@@ -1127,7 +1174,7 @@ function wire(s){
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
   }));
-  document.querySelectorAll('.dayjump').forEach(el=>el.onclick=()=>{ day=+el.dataset.d; render(); });
+  document.querySelectorAll('.dayjump, .ws').forEach(el=>el.onclick=()=>{ day=+el.dataset.d; render(); });
 
   const ca=document.getElementById('calAdd');
   if(ca) ca.onclick=()=>{
