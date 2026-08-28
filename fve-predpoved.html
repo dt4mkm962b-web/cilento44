@@ -253,8 +253,9 @@
 </details>
 
 <p class="note">
-  Model počítá z naklopené radiace (GTI) modelu ICON/ECMWF pro zadaný sklon a azimut, s teplotní
-  ztrátou panelů a ořezem na výkon střídače. Dokud ho neporovnáš se skutečnou výrobou, ber odhad
+  Model počítá z naklopené radiace (GTI) tří modelů počasí pro zadaný sklon a azimut, s teplotní
+  ztrátou panelů a ořezem na výkon střídače. Pracuje s hodinovými průměry, takže okamžité špičky
+  ve střídači bývají o 20–30 % vyšší — na denní energii to vliv nemá. Dokud ho neporovnáš se skutečnou výrobou, ber odhad
   s rezervou ±20 % — po pár jasných dnech dolaď <em>kalibraci</em> v nastavení.
   Nastavení se ukládá do adresy stránky, takže si ji můžeš uložit do záložek.
 </p>
@@ -266,7 +267,7 @@ const DEF = {
   bkWp:4.95, bTilt:30, bAz:90,
   loss:9, inv:10, calib:100,
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
-  loadDay:12, loadBase:0.35,
+  loadDay:13, loadBase:0.35,
   evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, winFrom:-1, winTo:-1,
   tripKm:0, tripArrive:15, tripCons:17, workTarget:80, workSplit:50, roadSoc:0, roadKm:0
 };
@@ -587,10 +588,11 @@ function simulate(d,st){
   const base=run(0,99,99);
   const from0=evOpen;
   // nabíjení nesmí zhoršit to, co by se dělo i bez něj — na chmurném dni dům ze sítě bere tak jako tak
-  const baseGrid=base.grid, baseEve=base.socEvePct;
+  const baseGrid=base.grid, baseEve=base.socEvePct, baseMin=base.minSocPct;
+  const floorEff=Math.min(floorPct, baseMin);   // ráno baterie klesá i bez nabíjení
   const ok=r=>!(r.grid>baseGrid+0.3
              || r.socEvePct<Math.min(cfg.reserve,baseEve)-0.5
-             || r.minSocPct<floorPct-0.5);
+             || r.minSocPct<floorEff-0.5);
   const startAt = null;
   const opts=[6,8,10,12].map(a=>{
     let best=null, earliest=null;
@@ -617,8 +619,9 @@ function simulate(d,st){
   // automatické okno musí patřit ke zvolenému proudu, ne k tomu nejlepšímu
   const optA = opts.find(o=>o.amps===cfg.evAmps) || rec;
   const autoOk = optA && optA.evDone>0.3;
-  const wf = (today && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
-  const wt = (today && cfg.winTo>0)   ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
+  const sel = st.sel===true;                     // den zobrazený v panelu
+  const wf = (sel && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
+  const wt = (sel && cfg.winTo>0)    ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
   const win = canCharge && wt>wf ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
   win.wf=wf; win.wt=wt;
   // proč není okno delší — vyzkoušej hodinu dřív a hodinu později
@@ -627,14 +630,26 @@ function simulate(d,st){
     if(r.grid>base.grid+0.3) return `koupil bys ${(r.grid-base.grid).toFixed(1)} kWh ze sítě`;
     if(r.socEvePct<Math.min(cfg.reserve,base.socEvePct)-0.5)
       return `ve 22:00 by v baterii zbylo ${Math.round(r.socEvePct)} % místo ${Math.round(cfg.reserve)} %`;
-    if(r.minSocPct<floorPct-0.5)
+    if(r.minSocPct<floorEff-0.5)
       return `baterie by přes den klesla na ${Math.round(r.minSocPct)} %`;
     return null;
   };
   win.limitBefore = win.wf>evOpen ? failWhy(run(cfg.evAmps,win.wf-1,win.wt)) : null;
   win.limitAfter  = win.wt<cfg.evTo ? failWhy(run(cfg.evAmps,win.wf,win.wt+1)) : null;
+  // co by šlo, kdyby večerní rezerva nebránila (zbylá pravidla platí dál)
+  (function(){
+    const okR=r=>!(r.grid>base.grid+0.3 || r.minSocPct<floorEff-0.5);
+    let best=null;
+    for(let f=evOpen;f<cfg.evTo;f++) for(let t=f+1;t<=cfg.evTo;t++){
+      const r=run(cfg.evAmps,f,t);
+      if(!okR(r)) continue;
+      if(!best||r.evDone>best.evDone+0.05) best=r;
+    }
+    win.alt = (best && best.evDone>win.evDone+2 && best.socEvePct<cfg.reserve-0.5)
+      ? {evDone:best.evDone,wf:best.start,wt:best.end,soc:best.socEvePct} : null;
+  })();
   win.tooLow = win.socEvePct < cfg.reserve-0.5;
-  win.tooDeep = win.minSocPct < floorPct-0.5;
+  win.tooDeep = win.minSocPct < floorEff-0.5;
   win.buysGrid = win.grid > base.grid+0.3;
 
   // toky pro zobrazení: stejná řada, z jaké je velké číslo nahoře
@@ -702,7 +717,8 @@ function week(){
     }
     const evBase=Math.max(0,Math.min(cfg.evCap,evHome));   // z čeho se doma nabíjí
 
-    const s=simulate(d,{batt,ev:evBase,h0:(today?nowH:0),startFrac:(today?nowFrac:0),back:dc.back});
+    const s=simulate(d,{batt,ev:evBase,h0:(today?nowH:0),startFrac:(today?nowFrac:0),
+      back:dc.back,sel:(d===day)});
     s.km=dc.km; s.back=dc.back; s.driven=driven; s.drive=drive;
     s.workTo=workTo; s.work=work; s.workAdd=workAdd;
     s.atWorkPct=(atWork!==null?atWork:ev)/cfg.evCap*100;
@@ -821,7 +837,7 @@ function report(s){
   L.push(`${WX[s.daily.code]||'—'} · ${f0(s.daily.tmin)}–${f0(s.daily.tmax)} °C · slunce ${f1(s.daily.sun)} z ${f1(s.daily.light)} h`);
   L.push(`Výroba za den ${f1(s.total)} kWh (rozptyl modelů ${f1(s.totalLo)}–${f1(s.totalHi)})${
     s.today&&s.h0>0?` · od teď ještě ${f1(s.rest)} kWh`:''}`);
-  L.push(`Špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW · nad 3 kW ${s.above3} h`);
+  L.push(`Nejsilnější hodina ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW v průměru · nad 3 kW ${s.above3} h`);
   if(s.today) L.push(`Z toho do auta ${f1(s.flow.toCar)}, do baterie ${f1(s.flow.toBatt)}, dům ${f1(s.flow.toHouse)}, síť ${f1(s.flow.exp)} kWh`);
   L.push(s.fullAt!==null ? `Baterie 100 % ~${hh(s.fullAt)}, bez auta by přeteklo ${f1(s.surplus)} kWh`
                          : `Baterie se dnes na 100 % nedostane`);
@@ -875,9 +891,13 @@ function weekTable(wk){
     const idx=todayIdx+i, sel=idx===day;
     const chg=s.use.evDone, drv=s.drive, net=chg-drv;
     const trip=TRIPS.find(t=>t[1]===s.km);
-    const popis = s.km>0
-      ? `${f0(s.km)} km${trip?' · '+trip[0]:''}${s.work?' · ⚡ '+f0(s.workTo)+' %':''}${s.driven?' · ujeto':''}`
-      : (s.driven?'ujeto':'bez jízdy');
+    const doma = s.back>=24 ? 'auto pryč celý den'
+               : (s.back>0 ? 'doma až od '+hh(s.back) : '');
+    const popis = [
+      s.km>0 ? `${f0(s.km)} km${trip?' · '+trip[0]:''}${s.driven?' · ujeto':''}`
+             : (s.driven?'ujeto':'bez jízdy'),
+      doma
+    ].filter(Boolean).join(' · ');
     const stav = !s.canCharge
       ? (s.why==='away'?'auto pryč':s.why==='late-back'?'vrací se '+hh(s.back):'po slunci')
       : (chg>0.1? s.use.amps+' A '+winStart(s,s.use)+'–'+hh(s.use.end)
@@ -895,6 +915,8 @@ function weekTable(wk){
         s.win.evDone>0.3?` · okno ${s.win.wf}–${s.win.wt} h, ${f1(s.win.evDone)} kWh do auta`:''}
         ${s.win.limitBefore?`<br>Dřív začít nejde: ${s.win.limitBefore}.`:''}
         ${s.win.limitAfter?`<br>Déle nabíjet nejde: ${s.win.limitAfter}.`:''}
+        ${s.win.alt?`<br>Bez večerní rezervy by šlo ${s.win.alt.wf}–${s.win.alt.wt} h
+          a ${f1(s.win.alt.evDone)} kWh (baterie večer ${f0(s.win.alt.soc)} %).`:''}
       </div>
       <div class="derow">
         <select class="dayback" data-key="${s.date}">${BACK.map(o=>
@@ -1116,7 +1138,7 @@ function render(){
       <div class="headline"><span class="big">${f1(s.total)}</span>
         <span class="unit">kWh — odhad modelu</span></div>
       <div class="cond">${WX[s.daily.code]||''} · ${f0(s.daily.tmin)}–${f0(s.daily.tmax)} °C ·
-        slunce ${f1(s.daily.sun)} z ${f1(s.daily.light)} h · špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW</div>
+        slunce ${f1(s.daily.sun)} z ${f1(s.daily.light)} h · nejsilnější hodina ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW</div>
       ${band(s)}
       <div class="c" style="margin-top:16px;border-left:3px solid var(--muted)">
         <p style="margin:0">Tohle je <strong>${dn}</strong>, den zpětně. Model ho přepočítal
@@ -1150,7 +1172,7 @@ function render(){
       <span class="unit">kWh ${s.today&&s.h0>0?'ještě dnes':'za den'}</span>
       ${s.today&&s.h0>0?`<span class="tot"><span class="totn">${f1(s.total)}</span> kWh celý den</span>`:''}
     </div>
-    <div class="cond">${WX[s.daily.code]||''} · špička ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW ·
+    <div class="cond">${WX[s.daily.code]||''} · nejsilnější hodina ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW v průměru ·
       vyrábí <strong>${tilt}</strong> (dopoledne ${f1(morn)}, odpoledne ${f1(aft)} kWh)${
       (data.models>1)?` · modely ${f1(s.totalLo)}–${f1(s.totalHi)} kWh`:''}</div>
     ${s.today&&s.rest>0.5?`<div class="split">${[
@@ -1186,6 +1208,9 @@ function render(){
       ${warn?`<p class="cb-warn"><strong>${warn.t}</strong> ${warn.d}</p>`
             :(s.canCharge?`<p class="cb-note">Vyjde to — ze sítě nic navíc a baterie domu zůstane nad rezervou
               (nejníž ${f0(W.minSocPct)} %).</p>`:'')}
+      ${W.alt?`<p class="cb-note">Okno drží tvoje večerní rezerva ${f0(cfg.reserve)} %.
+        Kdybys ji pustil, šlo by ${hh(W.alt.wf)}–${hh(W.alt.wt)} a ${f1(W.alt.evDone)} kWh
+        místo ${f1(W.evDone)} — baterie domu by ve 22:00 měla ${f0(W.alt.soc)} %.</p>`:''}
     </div>
 
     ${weekTable(wk)}
