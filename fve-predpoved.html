@@ -253,6 +253,8 @@
 </details>
 
 <p class="note">
+  Když ti výroba večer končí dřív, než model počítá, nastav v <em>Výroba končí před západem</em>
+  o kolik minut — terén a stromy astronomický západ neznají.
   Model počítá z naklopené radiace (GTI) tří modelů počasí pro zadaný sklon a azimut, s teplotní
   ztrátou panelů a ořezem na výkon střídače. Pracuje s hodinovými průměry, takže okamžité špičky
   ve střídači bývají o 20–30 % vyšší — na denní energii to vliv nemá. Dokud ho neporovnáš se skutečnou výrobou, ber odhad
@@ -265,7 +267,7 @@ const DEF = {
   lat:49.4406, lon:14.6803,
   akWp:4.95, aTilt:30, aAz:-90,
   bkWp:4.95, bTilt:30, bAz:90,
-  loss:9, inv:10, calib:100,
+  loss:9, inv:10, calib:100, horizonAM:0, horizonPM:0,
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
   loadDay:13, loadBase:0.35,
   evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, winFrom:-1, winTo:-1,
@@ -284,6 +286,8 @@ const FIELDS = [
   ['loss','Ztráty systému (%)','number','1'],
   ['inv','Max. výkon střídače (kW)','number','0.1'],
   ['calib','Kalibrace (%)','number','1'],
+  ['horizonAM','Výroba začíná po východu (min)','number','5'],
+  ['horizonPM','Výroba končí před západem (min)','number','5'],
   ['h','Baterie'],
   ['battCap','Kapacita (kWh)','number','0.1'],
   ['battChg','Max. nabíjecí výkon (kW)','number','0.1'],
@@ -511,6 +515,11 @@ function simulate(d,st){
 
   const lossF=(1-cfg.loss/100)*(cfg.calib/100);
   const nM=Math.min(data.gtiA.length,data.gtiB.length);
+  // podíl hodiny, kdy je slunce nad obzorem — ořízne umělý ocas po západu
+  const hm=t=>{ const p=String(t).slice(11,16).split(':'); return +p[0]+ (+p[1])/60; };
+  const sr=hm(data.daily.sunrise[d])+(cfg.horizonAM||0)/60;
+  const ss=hm(data.daily.sunset[d])-(cfg.horizonPM||0)/60;
+  const dayFrac=h=>Math.max(0,Math.min(h+1,ss)-Math.max(h,sr));
   const hours=idx.map(i=>{
     const air=data.temp[i];
     const vals=[];
@@ -521,9 +530,10 @@ function simulate(d,st){
       const dc=(gA/1000*cfg.akWp + gB/1000*cfg.bkWp)*lossF*Math.min(tf,1.05);
       vals.push(Math.max(0,Math.min(dc,cfg.inv)));
     }
+    const H=parseInt(data.time[i].slice(11,13));
+    const df=dayFrac(H);
     const mid=vals.reduce((a,b)=>a+b,0)/vals.length;
-    return {h:parseInt(data.time[i].slice(11,13)),
-            pv:mid, pvLo:Math.min(...vals), pvHi:Math.max(...vals),
+    return {h:H, pv:mid*df, pvLo:Math.min(...vals)*df, pvHi:Math.max(...vals)*df,
             temp:air, cloud:data.cloud[i]};
   });
 
@@ -674,9 +684,10 @@ function simulate(d,st){
   const total=hours.reduce((s,x)=>s+x.pv,0);
   const totalLo=hours.reduce((s,x)=>s+x.pvLo,0);
   const totalHi=hours.reduce((s,x)=>s+x.pvHi,0);
-  const rest=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pv,0);
-  const restLo=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvLo,0);
-  const restHi=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvHi,0);
+  const wNow=x=>(today && x.h===h0) ? Math.max(0,h0+1-startFrac) : 1;
+  const rest=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pv*wNow(x),0);
+  const restLo=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvLo*wNow(x),0);
+  const restHi=hours.filter(x=>x.h>=h0).reduce((s,x)=>s+x.pvHi*wNow(x),0);
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
   return {hours:base.hours,loadDay,learned:!!ll,total,totalLo,totalHi,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
