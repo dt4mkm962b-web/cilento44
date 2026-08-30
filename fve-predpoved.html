@@ -160,7 +160,7 @@
   .dewhy{font-size:11.5px;color:var(--muted);line-height:1.45}
   .derow{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
   .derow input[type=number]{width:64px;padding:6px 6px;text-align:center}
-  .derow select{width:auto;flex:1 1 130px;padding:6px}
+  .derow select{width:auto;flex:1 1 118px;padding:6px;font-size:12.5px}
   button.daytrip{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;
     letter-spacing:.05em;font-size:11px;font-weight:600;padding:6px 9px;border-radius:2px;
     cursor:pointer;border:1px solid var(--hair);background:#fff;color:var(--muted)}
@@ -341,6 +341,7 @@ function dayCfg(dateStr){
   const c=days[dateStr] || (days[dateStr]={km:0,back:0});
   if(c.back===undefined) c.back = (c.home===false) ? 24 : 0;   // migrace ze starého formátu
   delete c.home;
+  if(c.dep===undefined) c.dep = (c.back>=24) ? 0 : 24;         // hodina odjezdu
   return c;
 }
 function saveDays(){ pruneDays(); store.set('fve-days',JSON.stringify(days)); }
@@ -573,10 +574,17 @@ function simulate(d,st){
   const startSoc = st.batt;
   const min=cfg.battCap*cfg.battMin/100, max=cfg.battCap*cfg.battMax/100;
   const evNow = st.ev;
-  const back = st.back||0;                       // od kolika je auto doma
-  const evOpen = Math.max(cfg.evFrom, back, h0);  // dřív nabíjet nejde
-  const canCharge = evOpen < cfg.evTo;
-  const why = back>=24 ? 'away' : (back>=cfg.evTo ? 'late-back' : (h0>=cfg.evTo ? 'over' : 'sun'));
+  const back = st.back||0;                        // od kolika je auto zpátky doma
+  let dep = (st.dep===undefined?24:st.dep);       // v kolik odjíždí
+  if(back>=24 && dep>=24) dep=0;                  // "nevrátím se" bez odjezdu = pryč celý den
+  const avail = h => (h<dep || h>=back);          // je auto doma?
+  let evOpen=null;
+  for(let h=Math.max(cfg.evFrom,h0); h<cfg.evTo && evOpen===null; h++) if(avail(h)) evOpen=h;
+  const canCharge = evOpen!==null;
+  if(!canCharge) evOpen=Math.max(cfg.evFrom,h0);
+  const why = h0>=cfg.evTo ? 'over'
+            : (dep<=Math.max(cfg.evFrom,h0) && back>=cfg.evTo) ? 'away'
+            : (back>=cfg.evTo ? 'late-back' : 'sun');
   // podlaha nikdy nesmí být výš, než kde baterie právě je — jinak by nešlo nabíjet vůbec
   const floorPct=Math.min(cfg.dayFloor, startSoc/cfg.battCap*100);
   const effEv=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
@@ -592,7 +600,7 @@ function simulate(d,st){
       const w = (today && x.h===h0) ? Math.max(0,h0+1-startFrac) : 1;   // rozpracovaná hodina
       let evP=0;
       // evP = co odebere nabíječka, ev = co skutečně přiteče do baterie auta
-      if(amps>0 && x.h>=Math.max(from,evOpen) && x.h<to && ev<room-0.01)
+      if(amps>0 && x.h>=Math.max(from,evOpen) && x.h<to && avail(x.h) && ev<room-0.01)
         evP=Math.min(kW*w,(room-ev)/effEv);
       const pv=(mid?x.pv:x.pvLo)*w, ld=x.load*w;
       const net=pv-ld-evP;
@@ -753,8 +761,8 @@ function week(){
     const evBase=Math.max(0,Math.min(cfg.evCap,evHome));   // z čeho se doma nabíjí
 
     const s=simulate(d,{batt,ev:evBase,h0:(today?nowH:0),startFrac:(today?nowFrac:0),
-      back:dc.back,sel:(d===day)});
-    s.km=dc.km; s.back=dc.back; s.driven=driven; s.drive=drive;
+      back:dc.back,dep:dc.dep,sel:(d===day)});
+    s.km=dc.km; s.back=dc.back; s.dep=dc.dep; s.driven=driven; s.drive=drive;
     s.workTo=workTo; s.work=work; s.workAdd=workAdd;
     s.atWorkPct=(atWork!==null?atWork:ev)/cfg.evCap*100;
     s.evStartPct=ev/cfg.evCap*100;
@@ -906,9 +914,13 @@ function ntWindow(dateStr){
 
 // časté cesty — km a jestli se u nich dobíjí v půlce
 const TRIPS=[['Praha',190],['Soběslav',50],['Tábor',20],['Postoupky',500]];
-const BACK=[[0,'doma celý den'],[10,'doma od 10:00'],[12,'doma od 12:00'],[14,'doma od 14:00'],
-  [15,'doma od 15:00'],[16,'doma od 16:00'],[17,'doma od 17:00'],[18,'doma od 18:00'],
-  [19,'doma od 19:00'],[24,'PRYČ celý den']];
+const DEP=[[24,'neodjíždím'],[8,'odjíždím v 8:00'],[9,'odjíždím v 9:00'],[10,'odjíždím v 10:00'],
+  [11,'odjíždím v 11:00'],[12,'odjíždím v 12:00'],[13,'odjíždím v 13:00'],[14,'odjíždím v 14:00'],
+  [15,'odjíždím v 15:00'],[16,'odjíždím v 16:00'],[17,'odjíždím v 17:00'],[18,'odjíždím v 18:00'],
+  [19,'odjíždím v 19:00'],[0,'pryč už od rána']];
+const BACK=[[0,'nikam nejedu'],[10,'zpátky v 10:00'],[12,'zpátky v 12:00'],[13,'zpátky v 13:00'],
+  [14,'zpátky v 14:00'],[15,'zpátky v 15:00'],[16,'zpátky v 16:00'],[17,'zpátky v 17:00'],
+  [18,'zpátky v 18:00'],[19,'zpátky v 19:00'],[20,'zpátky v 20:00'],[24,'dnes se nevrátím']];
 function weekTable(wk){
   const dd=d=>new Date(d+'T12:00:00');
   const dn=d=>dd(d).toLocaleDateString('cs-CZ',{weekday:'long'})+' '+
@@ -926,8 +938,9 @@ function weekTable(wk){
     const idx=todayIdx+i, sel=idx===day;
     const chg=s.use.evDone, drv=s.drive, net=chg-drv;
     const trip=TRIPS.find(t=>t[1]===s.km);
-    const doma = s.back>=24 ? 'auto pryč celý den'
-               : (s.back>0 ? 'doma až od '+hh(s.back) : '');
+    const doma = (s.dep<=0 && s.back>=24) ? 'auto pryč celý den'
+      : [s.dep<24?'odjezd '+hh(s.dep):'', s.back>0&&s.back<24?'zpátky '+hh(s.back)
+         :(s.back>=24?'nevrací se':'')].filter(Boolean).join(' · ');
     const popis = [
       s.km>0 ? `${f0(s.km)} km${trip?' · '+trip[0]:''}${s.driven?' · ujeto':''}`
              : (s.driven?'ujeto':'bez jízdy'),
@@ -954,9 +967,11 @@ function weekTable(wk){
           a ${f1(s.win.alt.evDone)} kWh (baterie večer ${f0(s.win.alt.soc)} %).`:''}
       </div>
       <div class="derow">
+        <select class="daydep" data-key="${s.date}">${DEP.map(o=>
+          `<option value="${o[0]}"${o[0]===s.dep?' selected':''}>${o[1]}</option>`).join('')}</select>
         <select class="dayback" data-key="${s.date}">${BACK.map(o=>
           `<option value="${o[0]}"${o[0]===s.back?' selected':''}>${o[1]}</option>`).join('')}</select>
-        ${s.km>0||s.driven ? `<button class="pill daydone ${s.driven?'done':'todo'}"
+          ${s.km>0||s.driven ? `<button class="pill daydone ${s.driven?'done':'todo'}"
           data-key="${s.date}">${s.driven?'✓ ujeto':'ještě pojedu'}</button>`:''}
 
       </div></div>` : '';
@@ -1305,6 +1320,9 @@ function wire(s){
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
     dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
+  }));
+  document.querySelectorAll('.daydep').forEach(el=>el.addEventListener('change',()=>{
+    const v=parseInt(el.value); dayCfg(el.dataset.key).dep=isNaN(v)?24:v; saveDays(); render();
   }));
   document.querySelectorAll('.dayjump, .ws').forEach(el=>el.onclick=()=>{ day=+el.dataset.d; render(); });
 
