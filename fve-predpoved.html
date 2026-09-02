@@ -135,8 +135,6 @@
   .cb-sel{display:flex;align-items:center;gap:5px}
   .cb-sel select{width:auto;padding:7px 6px;font-size:14px}
   .cb-sel span{color:var(--muted)}
-  .cb-auto{margin:0!important;padding:7px 10px;font-size:11px;background:transparent;
-    color:var(--muted);border-color:var(--hair)}
   .cb-off{font-family:var(--mono);font-size:17px}
   .daylist{border:1px solid var(--hair);border-radius:3px;overflow:hidden;background:var(--card)}
   .dayrow+.dayrow{border-top:1px solid var(--hair)}
@@ -228,6 +226,8 @@
         <input id="evSoc" type="number" step="1">
         <button data-k="evSoc" data-s="1">+</button></div></div>
   </div>
+
+  <div id="sofarBox"></div>
 
   <div class="eyebrow" style="margin-top:13px">Jsem na cestě a dobíjím mimo domov</div>
   <div class="nowrow">
@@ -914,7 +914,8 @@ function ntWindow(dateStr){
 }
 
 // časté cesty — km a jestli se u nich dobíjí v půlce
-const TRIPS=[['Praha',190],['Soběslav',50],['Tábor',20],['Postoupky',500]];
+// [název, km, odjezd, návrat] — časy jsou jen výchozí, u dne se dají přepsat
+const TRIPS=[['Praha',190,7,18],['Soběslav',50,9,12],['Tábor',20,24,0],['Postoupky',500,7,20]];
 const DEP=[[24,'neodjíždím'],[8,'odjíždím v 8:00'],[9,'odjíždím v 9:00'],[10,'odjíždím v 10:00'],
   [11,'odjíždím v 11:00'],[12,'odjíždím v 12:00'],[13,'odjíždím v 13:00'],[14,'odjíždím v 14:00'],
   [15,'odjíždím v 15:00'],[16,'odjíždím v 16:00'],[17,'odjíždím v 17:00'],[18,'odjíždím v 18:00'],
@@ -956,7 +957,7 @@ function weekTable(wk){
       <div class="derow">
         <input class="dayin" data-key="${s.date}" type="number" step="10" value="${s.km}" inputmode="numeric">
         ${TRIPS.map(t=>`<button class="daytrip${s.km===t[1]?' on':''}" data-key="${s.date}"
-          data-km="${t[1]}">${t[0]}</button>`).join('')}
+          data-km="${t[1]}" data-dep="${t[2]}" data-back="${t[3]}">${t[0]}</button>`).join('')}
       </div>
       <div class="dewhy">
         Výroba ${f1(s.total)} kWh (pesimisticky ${f1(s.totalLo)}) · spotřeba domu ${f1(s.loadDay)} kWh${
@@ -1113,6 +1114,24 @@ function render(){
     +` · východ ${s.daily.sunrise}, západ ${s.daily.sunset}`;
 
   /* --- pruh s dojezdem na nejbližší cesty --- */
+  const sb=document.getElementById('sofarBox');
+  if(sb){
+    const t0=wk[0];
+    sb.innerHTML=(t0 && t0.passed>1)?`
+      <div class="eyebrow" style="margin-top:13px">Zpřesnit dnešek podle Solplanetu</div>
+      <div class="sofar">
+        <span>Do teď mělo být <b>${f1(t0.passed)} kWh</b>${
+          t0.realKwh>0?` · zadáno <b>${f1(t0.realKwh)} kWh</b> (${t0.dayF>1?'+':''}${
+          Math.round((t0.dayF-1)*100)} %)`:''}</span>
+        <span class="sofar-in">
+          <input id="sofar" type="number" step="0.1" placeholder="${f1(t0.passed)}"
+            value="${t0.realKwh>0?f1(t0.realKwh).replace(',','.'):''}">
+          <button class="act" id="sofarSet">Zpřesnit</button>
+          ${t0.realKwh>0?'<button class="act" id="sofarClr">Zrušit</button>':''}
+        </span>
+      </div>`:'';
+  }
+
   const ti=document.getElementById('tripInfo');
   const ro=document.getElementById('roadOut');
   if(ro){
@@ -1234,18 +1253,6 @@ function render(){
     ].filter(x=>x[1]>0.2).map(x=>`<span><i style="background:${x[2]}"></i>${
       f1(x[1])} kWh ${x[0]}</span>`).join('')}</div>`:''}
 
-    ${s.today&&s.passed>1?`<div class="sofar">
-      <span>Do teď mělo být <b>${f1(s.passed)} kWh</b>${
-        s.realKwh>0?` · skutečně <b>${f1(s.realKwh)} kWh</b> (${s.dayF>1?'+':''}${
-        Math.round((s.dayF-1)*100)} %)`:''}</span>
-      <span class="sofar-in">
-        <input id="sofar" type="number" step="0.1" placeholder="${f1(s.passed)}"
-          value="${s.realKwh>0?f1(s.realKwh).replace(',','.'):''}">
-        <button class="act" id="sofarSet">Zpřesnit</button>
-        ${s.realKwh>0?'<button class="act" id="sofarClr">Zrušit</button>':''}
-      </span>
-    </div>`:''}
-
     <div class="chargebox${warn?' bad':''}">
       ${s.canCharge?`<div class="cb-top">
         <div class="stepper">
@@ -1256,7 +1263,6 @@ function render(){
           <span>–</span>
           <select id="winTo">${hrsOpt(s.evOpen+1,cfg.evTo,W.wt)}</select>
         </div>
-        <button class="act cb-auto" id="winAuto">Podle modelu</button>
       </div>`:`<div class="cb-top"><b class="cb-off">${
         s.why==='away'?'Auto dnes není doma':s.why==='late-back'?'Auto se vrací až v '+hh(s.back):
         'Dnes už je po slunci'}</b></div>`}
@@ -1315,8 +1321,9 @@ function wire(s){
   });
   document.querySelectorAll('.daytrip').forEach(el=>el.onclick=()=>{
     const c=dayCfg(el.dataset.key), km=+el.dataset.km;
-    if(c.km===km) c.km=0;                       // druhé ťuknutí cestu zruší
-    else { c.km=km; c.done=false; }
+    if(c.km===km){ c.km=0; c.dep=24; c.back=0; }          // druhé ťuknutí cestu zruší
+    else { c.km=km; c.done=false;
+           c.dep=+el.dataset.dep; c.back=+el.dataset.back; }
     saveDays(); render();
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
@@ -1351,7 +1358,7 @@ function wire(s){
   if(sf) sf.onclick=()=>{
     const v=parseFloat((document.getElementById('sofar').value||'').replace(',','.'));
     if(!(v>0)) return;
-    todayReal={d:s.date,kwh:v}; writeHash(); render();
+    todayReal={d:data.daily.time[todayIdx],kwh:v}; writeHash(); render();
   };
   const sc=document.getElementById('sofarClr');
   if(sc) sc.onclick=()=>{ todayReal={d:'',kwh:0}; writeHash(); render(); };
@@ -1361,10 +1368,6 @@ function wire(s){
     if(cfg.winTo<=cfg.winFrom) cfg.winTo=Math.min(cfg.evTo,cfg.winFrom+1);
     writeHash(); render(); };
   if(wtEl) wtEl.onchange=()=>{ cfg.winTo=+wtEl.value; writeHash(); render(); };
-  const wa=document.getElementById('winAuto');
-  if(wa) wa.onclick=()=>{ cfg.winFrom=-1; cfg.winTo=-1;
-    if(s.rec&&s.rec.evDone>0.3) cfg.evAmps=s.rec.amps; writeHash(); render(); };
-
   const ad=document.getElementById('ampDown'), au=document.getElementById('ampUp');
   if(ad){ ad.onclick=()=>step(-1); ad.disabled=cfg.evAmps<=AMPS[0]; }
   if(au){ au.onclick=()=>step(1);  au.disabled=cfg.evAmps>=AMPS[AMPS.length-1]; }
