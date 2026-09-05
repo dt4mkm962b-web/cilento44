@@ -1132,6 +1132,21 @@ function render(){
       </div>`:'';
   }
 
+  // velká cesta dál ve výhledu — kdy si ji začít hlídat
+  const bigAhead=()=>{
+    const big=wk.slice(2).find(x=>x.km>=150 && !x.driven);
+    if(!big) return '';
+    const i=wk.indexOf(big);
+    const den=new Date(big.date+'T12:00:00').toLocaleDateString('cs-CZ',{weekday:'long'});
+    const potreba=big.km*cfg.tripCons/100/cfg.evCap*100 + cfg.tripArrive;
+    const chybi=potreba-big.evStartPct;
+    return `<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--hair);
+      font-size:12px;color:${chybi>0.5?'var(--surplus)':'var(--muted)'}">
+      <strong>${den} tě čeká ${f0(big.km)} km.</strong> Potřebuješ ráno ${f0(potreba)} %,
+      model počítá s ${f0(big.evStartPct)} %. ${chybi>0.5
+        ? `Chybí ${f0(chybi)} % — dobij den předtím v nízkém tarifu.` : 'Vychází to.'}</div>`;
+  };
+
   const ti=document.getElementById('tripInfo');
   if(ti){
     const horizon=wk.slice(0,2).filter(x=>x.km>0 && !x.driven);
@@ -1624,25 +1639,220 @@ function initNow(){
   ['battNow','evSoc'].forEach(k=>{
     const el=document.getElementById(k); if(el) el.value=cfg[k];
   });
-  document.getElementById('roadUse').onclick=()=>{
-    if(!(cfg.roadSoc>0)){ document.getElementById('roadOut').textContent='Nejdřív zadej, na kolik procent jsi dobil.'; return; }
-    // stav auta = co je v něm teď u nabíječky; do dnešního řádku zbývající km domů
-    cfg.evSoc=Math.max(0,Math.min(100,Math.round(cfg.roadSoc)));
-    document.getElementById('evSoc').value=cfg.evSoc;
-    const dKm=Math.max(0,Math.round(cfg.roadKm));
-    if(data){
-      const c=dayCfg(data.daily.time[todayIdx]);
-      c.km=dKm; c.done=false; saveDays();
-    }
-    cfg.roadSoc=0; cfg.roadKm=0;
-    cfg.winFrom=-1; cfg.winTo=-1;              // okno znovu podle modelu
-    document.getElementById('roadSoc').value=0; document.getElementById('roadKm').value=0;
+  document.getElementById('nowBtn').onclick=()=>{
     stateAt=new Date(); refreshClock();
     apply(true);
-    const m=document.getElementById('nowMsg');
-    if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Zapsáno:</span> auto '+
-      f0(cfg.evSoc)+' %, do dnešního dne zbývá '+f0(dKm)+' km domů.';
+    document.getElementById('nowMsg').textContent=
+      'Platné k '+new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})
+      +' — dnešek se počítá od '+String(nowH).padStart(2,'0')+':00.';
   };
+  document.querySelectorAll('.nstep button').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k, el=document.getElementById(k);
+    const step=parseFloat(b.dataset.step||'1');
+    const mn=parseFloat(b.dataset.min??'0'), mx=parseFloat(b.dataset.max??'100');
+    const v=(parseFloat(el.value)||0)+(+b.dataset.s)*step;
+    cfg[k]=Math.max(mn,Math.min(mx,Math.round(v*10)/10));
+    el.value=cfg[k]; apply(false);
+  });
+
+  const ca=document.getElementById('calAdd');
+  if(ca) ca.onclick=()=>{
+    const el=document.getElementById('realkwh');
+    const real=parseFloat((el.value||'').replace(',','.'));
+    const msg=document.getElementById('calMsg');
+    if(!(real>0)){ msg.textContent='Zadej skutečnou výrobu v kWh.'; return; }
+    const consAll=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
+    const evAdd=parseFloat((document.getElementById('realev').value||'').replace(',','.'));
+    const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
+    // od celkové spotřeby odečti, co si vzala nabíječka (v autě přibylo méně kvůli ztrátám)
+    const cons=(consAll>0) ? Math.max(0, consAll-(evAdd>0?evAdd/eff:0)) : NaN;
+    const m100=s.pureTotal*100/cfg.calib;
+    const prev=calLog.find(x=>x.d===s.date);
+    calLog=calLog.filter(x=>x.d!==s.date);
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    calLog.sort((a,b)=>a.d<b.d?-1:1);
+    el.value='';
+    ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
+    writeHash(); render();
+    const den=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',
+      {weekday:'long',day:'numeric',month:'numeric'});
+    const m2=document.getElementById('calMsg');
+    if(m2) m2.innerHTML=`<span style="color:var(--batt);font-weight:600">Zapsáno — ${den}:</span>
+      model ${f1(s.pureTotal)} kWh, skutečnost ${f1(real)} kWh
+      (${real>=s.pureTotal?'+':''}${Math.round((real/s.pureTotal-1)*100)} %).${
+      cons>0?` Čistá spotřeba domu ${f1(cons)} kWh${evAdd>0?` (z ${f1(consAll)} po odečtení nabíjení)`:''}.`:''}`;
+  };
+  document.querySelectorAll('.calDel').forEach(el=>el.onclick=()=>{
+    calLog=calLog.filter(x=>x.d!==el.dataset.d); writeHash(); render();
+    const m=document.getElementById('nowMsg');
+    if(m) m.innerHTML='<span style="color:var(--muted)">Den smazán.</span>';
+  });
+  const cc=document.getElementById('calCopy');
+  if(cc) cc.onclick=async()=>{
+    try{ await navigator.clipboard.writeText(document.getElementById('calDump').value);
+      cc.textContent='Zkopírováno'; setTimeout(()=>cc.textContent='Zkopírovat',1500);
+    }catch(e){ document.getElementById('calDump').select(); }
+  };
+  const cpaste=document.getElementById('calPaste');
+  if(cpaste) cpaste.onclick=()=>{
+    const msg=document.getElementById('calMsg');
+    try{
+      const v=JSON.parse(document.getElementById('calDump').value);
+      if(!Array.isArray(v)) throw 0;
+      calLog=v.filter(x=>x&&x.d&&isFinite(x.r)&&isFinite(x.m100));
+      calLog.sort((a,b)=>a.d<b.d?-1:1);
+      writeHash(); render();
+      const m=document.getElementById('calMsg');
+      if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Načteno '+calLog.length+' dnů.</span>';
+    }catch(e){ if(msg) msg.textContent='To pole nejde přečíst — musí to být seznam ve složených závorkách.'; }
+  };
+  const clr=document.getElementById('calClear');
+  if(clr) clr.onclick=()=>{
+    if(clr.dataset.armed){ calLog=[]; writeHash(); render();
+      const m=document.getElementById('nowMsg');
+      if(m) m.innerHTML='<span style="color:var(--muted)">Kalibrační historie smazána.</span>';
+    } else { clr.dataset.armed='1'; clr.textContent='Opravdu smazat?';
+      clr.style.color='var(--surplus)'; clr.style.borderColor='var(--surplus)';
+      setTimeout(()=>{ if(clr.dataset.armed){ delete clr.dataset.armed;
+        clr.textContent='Vymazat vše'; clr.style.color='var(--muted)';
+        clr.style.borderColor='var(--hair)'; } },4000);
+    }
+  };
+  const setcal=document.getElementById('setcal');
+  if(setcal) setcal.onclick=()=>{
+    cfg.calib=calSuggest(); const el=document.getElementById('calib');
+    if(el) el.value=cfg.calib; writeHash(); render();
+  };
+  const cp=document.getElementById('copy');
+  if(cp) cp.onclick=async e=>{
+    await navigator.clipboard.writeText(document.getElementById('rep').textContent);
+    e.target.textContent='Zkopírováno'; setTimeout(()=>e.target.textContent='Zkopírovat report',1600);
+  };
+}
+
+function buildTabs(){
+  if(!data) return;
+  const last=Math.min(data.daily.time.length,todayIdx+4);
+  document.getElementById('tabs').innerHTML=data.daily.time.slice(0,last).map((t,i)=>{
+    const d=new Date(t+'T12:00:00');
+    const rel=i-todayIdx;
+    const name=rel===0?'dnes':rel===-1?'včera':rel===-2?'předevčírem':d.toLocaleDateString('cs-CZ',{weekday:'short'});
+    const lbl=name+' '+d.toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'});
+    return `<button class="tab${rel<0?' past':''}" role="tab" aria-selected="${i===day}" data-d="${i}">${lbl}</button>`;}).join('');
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ day=+b.dataset.d; render(); });
+}
+
+function initNow(){
+  ['battNow','evSoc'].forEach(k=>{
+    const el=document.getElementById(k); if(el) el.value=cfg[k];
+  });
+  document.getElementById('nowBtn').onclick=()=>{
+    stateAt=new Date(); refreshClock();
+    apply(true);
+    document.getElementById('nowMsg').textContent=
+      'Platné k '+new Date().toLocaleTimeString('cs-CZ',{hour:'2-digit',minute:'2-digit'})
+      +' — dnešek se počítá od '+String(nowH).padStart(2,'0')+':00.';
+  };
+  document.querySelectorAll('.nstep button').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k, el=document.getElementById(k);
+    const step=parseFloat(b.dataset.step||'1');
+    const mn=parseFloat(b.dataset.min??'0'), mx=parseFloat(b.dataset.max??'100');
+    const v=(parseFloat(el.value)||0)+(+b.dataset.s)*step;
+    cfg[k]=Math.max(mn,Math.min(mx,Math.round(v*10)/10));
+    el.value=cfg[k]; apply(false);
+  });
+
+  const ca=document.getElementById('calAdd');
+  if(ca) ca.onclick=()=>{
+    const el=document.getElementById('realkwh');
+    const real=parseFloat((el.value||'').replace(',','.'));
+    const msg=document.getElementById('calMsg');
+    if(!(real>0)){ msg.textContent='Zadej skutečnou výrobu v kWh.'; return; }
+    const consAll=parseFloat((document.getElementById('realload').value||'').replace(',','.'));
+    const evAdd=parseFloat((document.getElementById('realev').value||'').replace(',','.'));
+    const eff=Math.max(0.5,Math.min(1,(cfg.evEff||90)/100));
+    // od celkové spotřeby odečti, co si vzala nabíječka (v autě přibylo méně kvůli ztrátám)
+    const cons=(consAll>0) ? Math.max(0, consAll-(evAdd>0?evAdd/eff:0)) : NaN;
+    const m100=s.pureTotal*100/cfg.calib;
+    const prev=calLog.find(x=>x.d===s.date);
+    calLog=calLog.filter(x=>x.d!==s.date);
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    calLog.sort((a,b)=>a.d<b.d?-1:1);
+    el.value='';
+    ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
+    writeHash(); render();
+    const den=new Date(s.date+'T12:00:00').toLocaleDateString('cs-CZ',
+      {weekday:'long',day:'numeric',month:'numeric'});
+    const m2=document.getElementById('calMsg');
+    if(m2) m2.innerHTML=`<span style="color:var(--batt);font-weight:600">Zapsáno — ${den}:</span>
+      model ${f1(s.pureTotal)} kWh, skutečnost ${f1(real)} kWh
+      (${real>=s.pureTotal?'+':''}${Math.round((real/s.pureTotal-1)*100)} %).${
+      cons>0?` Čistá spotřeba domu ${f1(cons)} kWh${evAdd>0?` (z ${f1(consAll)} po odečtení nabíjení)`:''}.`:''}`;
+  };
+  document.querySelectorAll('.calDel').forEach(el=>el.onclick=()=>{
+    calLog=calLog.filter(x=>x.d!==el.dataset.d); writeHash(); render();
+    const m=document.getElementById('nowMsg');
+    if(m) m.innerHTML='<span style="color:var(--muted)">Den smazán.</span>';
+  });
+  const cc=document.getElementById('calCopy');
+  if(cc) cc.onclick=async()=>{
+    try{ await navigator.clipboard.writeText(document.getElementById('calDump').value);
+      cc.textContent='Zkopírováno'; setTimeout(()=>cc.textContent='Zkopírovat',1500);
+    }catch(e){ document.getElementById('calDump').select(); }
+  };
+  const cpaste=document.getElementById('calPaste');
+  if(cpaste) cpaste.onclick=()=>{
+    const msg=document.getElementById('calMsg');
+    try{
+      const v=JSON.parse(document.getElementById('calDump').value);
+      if(!Array.isArray(v)) throw 0;
+      calLog=v.filter(x=>x&&x.d&&isFinite(x.r)&&isFinite(x.m100));
+      calLog.sort((a,b)=>a.d<b.d?-1:1);
+      writeHash(); render();
+      const m=document.getElementById('calMsg');
+      if(m) m.innerHTML='<span style="color:var(--batt);font-weight:600">Načteno '+calLog.length+' dnů.</span>';
+    }catch(e){ if(msg) msg.textContent='To pole nejde přečíst — musí to být seznam ve složených závorkách.'; }
+  };
+  const clr=document.getElementById('calClear');
+  if(clr) clr.onclick=()=>{
+    if(clr.dataset.armed){ calLog=[]; writeHash(); render();
+      const m=document.getElementById('nowMsg');
+      if(m) m.innerHTML='<span style="color:var(--muted)">Kalibrační historie smazána.</span>';
+    } else { clr.dataset.armed='1'; clr.textContent='Opravdu smazat?';
+      clr.style.color='var(--surplus)'; clr.style.borderColor='var(--surplus)';
+      setTimeout(()=>{ if(clr.dataset.armed){ delete clr.dataset.armed;
+        clr.textContent='Vymazat vše'; clr.style.color='var(--muted)';
+        clr.style.borderColor='var(--hair)'; } },4000);
+    }
+  };
+  const setcal=document.getElementById('setcal');
+  if(setcal) setcal.onclick=()=>{
+    cfg.calib=calSuggest(); const el=document.getElementById('calib');
+    if(el) el.value=cfg.calib; writeHash(); render();
+  };
+  const cp=document.getElementById('copy');
+  if(cp) cp.onclick=async e=>{
+    await navigator.clipboard.writeText(document.getElementById('rep').textContent);
+    e.target.textContent='Zkopírováno'; setTimeout(()=>e.target.textContent='Zkopírovat report',1600);
+  };
+}
+
+function buildTabs(){
+  if(!data) return;
+  const last=Math.min(data.daily.time.length,todayIdx+4);
+  document.getElementById('tabs').innerHTML=data.daily.time.slice(0,last).map((t,i)=>{
+    const d=new Date(t+'T12:00:00');
+    const rel=i-todayIdx;
+    const name=rel===0?'dnes':rel===-1?'včera':rel===-2?'předevčírem':d.toLocaleDateString('cs-CZ',{weekday:'short'});
+    const lbl=name+' '+d.toLocaleDateString('cs-CZ',{day:'numeric',month:'numeric'});
+    return `<button class="tab${rel<0?' past':''}" role="tab" aria-selected="${i===day}" data-d="${i}">${lbl}</button>`;}).join('');
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ day=+b.dataset.d; render(); });
+}
+
+function initNow(){
+  ['battNow','evSoc'].forEach(k=>{
+    const el=document.getElementById(k); if(el) el.value=cfg[k];
+  });
   document.getElementById('nowBtn').onclick=()=>{
     stateAt=new Date(); refreshClock();
     apply(true);
