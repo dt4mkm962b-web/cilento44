@@ -1157,14 +1157,14 @@ function render(){
       const low=Math.min(...horizon.map(x=>x.lowPct));
       const anyWork=horizon.some(x=>x.work);
       const worst=horizon.find(x=>Math.abs(x.lowPct-low)<0.01);
-      const kde=(worst&&worst.work&&Math.abs(worst.atWorkPct-low)<0.01)?'při příjezdu do práce':'po návratu domů';
+      const kde='ve chvíli návratu domů';
       const col = low<cfg.tripArrive?'var(--surplus)':'var(--batt)';
       const kdy = horizon.length>1 ? 'dnes a zítra tě čeká'
         : (wk.indexOf(horizon[0])===0 ? 'dnes tě čeká' : 'zítra tě čeká');
       ti.innerHTML=`<div style="border-left:3px solid ${col};padding:8px 11px;background:#fff;border-radius:2px">
         <span style="font-family:var(--mono);font-size:22px;font-weight:600;color:${col}">${
           low<0?'—':f0(low)+' %'}</span>
-        <span style="font-size:13px"> ${low<0?'nedojedeš':'nejníž se dostaneš '+kde} · ${kdy} ${f0(km)} km${
+        <span style="font-size:13px"> ${low<0?'nedojedeš':'ti zbyde '+kde} · ${kdy} ${f0(km)} km${
           horizon.length>1?' ('+horizon.map(x=>f0(x.km)).join(' + ')+')':''}</span>
         <div style="font-size:12px;color:var(--muted);margin-top:3px">
           Máš ${f0(cfg.evSoc)} %, cesta spotřebuje ${f1(kwh)} kWh${
@@ -1172,8 +1172,13 @@ function render(){
             low<0?` — chybí ${f1(-low/100*cfg.evCap)} kWh, <strong style="color:var(--surplus)">budeš muset dobít po cestě</strong>.`
             :(low<3?` — to je skoro na nulu, <strong style="color:var(--surplus)">počítej s dobitím po cestě</strong>.`
             :(low<cfg.tripArrive?` — dojedeš, ale s malou rezervou.`:'.'))}
-          <br>Doma budeš mít po ${horizon.length>1?'zítřejší':'té'} cestě
-          <strong>${f0(horizon[horizon.length-1].evEndPct)} %</strong>.</div>
+          <br>${(()=>{ const last=horizon[horizon.length-1], W=last.win;
+            if(!(W.evDone>0.3)) return 'Po návratu se toho do auta doma už moc nevejde.';
+            const zBat=Math.max(0,W.carFromBatt*cfg.evEff/100);
+            const zPv=Math.max(0,W.evDone-zBat);
+            return `Doma se pak do auta vejde ještě <strong>${f1(W.evDone)} kWh</strong>`+
+              (zBat>0.2?` — ${f1(zPv)} ze slunce a ${f1(zBat)} z baterie`:' ze slunce')+
+              ` (baterie zůstane na ${f0(W.socEvePct)} %).`; })()}</div>
         ${bigAhead()}
       </div>`;
     }
