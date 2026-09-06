@@ -569,9 +569,10 @@ function simulate(d,st){
   const startSoc = st.batt;
   const min=cfg.battCap*cfg.battMin/100, max=cfg.battCap*cfg.battMax/100;
   const evNow = st.ev;
-  const back = st.back||0;                        // od kolika je auto zpátky doma
+  let back = st.back||0;                          // od kolika je auto zpátky doma
   let dep = (st.dep===undefined?24:st.dep);       // v kolik odjíždí
   if(back>=24 && dep>=24) dep=0;                  // "nevrátím se" bez odjezdu = pryč celý den
+  if(dep>=24) back=0;                             // když nikam nejedeš, není se odkud vracet
   const avail = h => (h<dep || h>=back);          // je auto doma?
   let evOpen=null;
   for(let h=Math.max(cfg.evFrom,h0); h<cfg.evTo && evOpen===null; h++) if(avail(h)) evOpen=h;
@@ -949,8 +950,9 @@ function weekTable(wk){
     const chg=s.win.evDone;
 
     const doma = (s.dep<=0 && s.back>=24) ? 'auto pryč celý den'
-      : [s.dep<24?'odjezd '+hh(s.dep):'', s.back>0&&s.back<24?'zpátky '+hh(s.back)
-         :(s.back>=24?'nevrací se':'')].filter(Boolean).join(' · ');
+      : (s.dep>=24 ? ''
+        : ['odjezd '+hh(s.dep), s.back>0&&s.back<24?'zpátky '+hh(s.back)
+           :(s.back>=24?'nevrací se':'')].filter(Boolean).join(' · '));
     const popis = [
       s.km>0 ? `${f0(s.km)} km${s.driven?' · ujeto':''}`
              : (s.driven?'ujeto':'bez jízdy'),
@@ -1284,9 +1286,10 @@ function render(){
 
 function wire(s){
   document.querySelectorAll('.dayin').forEach(el=>el.addEventListener('change',()=>{
-    dayCfg(el.dataset.key).km=parseFloat(el.value)||0; saveDays(); render();
+    dayCfg(el.dataset.key).km=parseFloat(el.value)||0; saveDays(); resetWin(); render();
   }));
   document.querySelectorAll('.daydone').forEach(el=>el.onclick=()=>{
+    resetWin();
     const c=dayCfg(el.dataset.key);
     c.done=!c.done;
     if(c.done){ c.kmDone=c.km||c.kmDone||0; c.km=0; }        // ujeto → km pryč z plánu
@@ -1294,12 +1297,17 @@ function wire(s){
     saveDays(); render();
   });
   document.querySelectorAll('.dayback').forEach(el=>el.addEventListener('change',()=>{
-    dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); render();
+    dayCfg(el.dataset.key).back=parseInt(el.value)||0; saveDays(); resetWin(); render();
   }));
   document.querySelectorAll('.daydep').forEach(el=>el.addEventListener('change',()=>{
-    const v=parseInt(el.value); dayCfg(el.dataset.key).dep=isNaN(v)?24:v; saveDays(); render();
+    const v=parseInt(el.value); const c=dayCfg(el.dataset.key);
+    c.dep=isNaN(v)?24:v;
+    if(c.dep>=24) c.back=0;                     // neodjíždím = není se odkud vracet
+    saveDays(); resetWin(); render();
   }));
-  document.querySelectorAll('.dayjump, .ws').forEach(el=>el.onclick=()=>{ day=+el.dataset.d; render(); });
+  const resetWin=()=>{ cfg.winFrom=-1; cfg.winTo=-1; };
+  document.querySelectorAll('.dayjump, .ws').forEach(el=>el.onclick=()=>{
+    day=+el.dataset.d; resetWin(); render(); });
 
   const AMPS=[6,8,10,12];
   const step=d=>{
