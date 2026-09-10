@@ -360,6 +360,19 @@ function learnedLoad(){
   if(v.length<2) return null;
   return {kwh:v.reduce((a,x)=>a+x.c,0)/v.length, n:v.length};
 }
+// learnShape: přestřeluje model ráno, nebo odpoledne? Dělí se ve 13:00.
+function learnShape(){
+  const v=calLog.filter(x=>x.mm>0 && x.mr>0 && x.m100>x.mm).slice(-10);
+  if(v.length<2) return null;
+  const sMm=v.reduce((a,x)=>a+x.mm,0), sMr=v.reduce((a,x)=>a+x.mr,0);
+  const sPm=v.reduce((a,x)=>a+(x.m100-x.mm),0), sPr=v.reduce((a,x)=>a+(x.r-x.mr),0);
+  if(sMm<5 || sPm<5) return null;
+  const overall=(sMr+sPr)/(sMm+sPm);
+  if(!(overall>0)) return null;
+  const am=Math.max(0.6,Math.min(1.6,(sMr/sMm)/overall));
+  const pm=Math.max(0.6,Math.min(1.6,(sPr/sPm)/overall));
+  return {am,pm,n:v.length};
+}
 function calSuggest(){
   if(!calLog.length) return null;
   const m=calLog.reduce((a,x)=>a+x.m100,0), r=calLog.reduce((a,x)=>a+x.r,0);
@@ -560,6 +573,11 @@ function simulate(d,st){
   const passed = today
     ? hours.reduce((a,x)=>a + (x.h<h0 ? x.pv : (x.h===h0 ? x.pv*Math.max(0,startFrac-h0) : 0)),0)
     : 0;
+  // naučený tvar dne — posune výrobu mezi dopolednem a odpolednem, celkovou sumu drží
+  const shp=learnShape();
+  if(shp) hours.forEach(x=>{ const f=(x.h<13?shp.am:shp.pm);
+    x.pv*=f; x.pvLo*=f; x.pvHi*=f; });
+
   const pureTotal = hours.reduce((a,x)=>a+x.pv,0);   // čistý odhad modelu, bez průběžného zpřesnění
   const realKwh = (today && todayReal.d===dateStr && todayReal.kwh>0) ? todayReal.kwh : 0;
   const dayF = (realKwh>0 && passed>2) ? Math.max(0.5,Math.min(2, realKwh/passed)) : 1;
@@ -1079,6 +1097,12 @@ function calCard(s){
         : `<p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Zadávej i celkovou spotřebu
            a kolik z ní šlo do auta — model si dopočítá čistou spotřebu domu a od druhého dne
            ji použije místo odhadu ${f1(cfg.loadDay)} kWh/den.</p>`;})()}
+      ${(()=>{const sh=learnShape(); return sh
+        ? `<p style="margin:8px 0 0;color:var(--batt)">Tvar dne z ${sh.n} dnů: dopoledne
+           ${sh.am>1?'+':''}${Math.round((sh.am-1)*100)} %, odpoledne
+           ${sh.pm>1?'+':''}${Math.round((sh.pm-1)*100)} % — model to už započítává.</p>`
+        : `<p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Když kolem poledne zadáš
+           průběžnou výrobu a večer celkovou, model se naučí i rozložení dne.</p>`;})()}
       <p style="margin:10px 0 0">${trend} ${calLog.length===1?'Z jednoho zapsaného dne':
         'Ze všech '+calLog.length+' zapsaných dnů'} vychází kalibrace <strong>${sug} %</strong>${
         sug===Math.round(cfg.calib)?' — to už nastavené máš.':''}
@@ -1333,7 +1357,10 @@ function wire(s){
   if(sf) sf.onclick=()=>{
     const v=parseFloat((document.getElementById('sofar').value||'').replace(',','.'));
     if(!(v>0)) return;
-    todayReal={d:data.daily.time[todayIdx],kwh:v}; writeHash(); render();
+    const t0=wk[0];
+    todayReal={d:data.daily.time[todayIdx],kwh:v,
+      mm:t0.passed*100/cfg.calib, hr:nowFrac};   // odhad k té chvíli, přepočtený na kalibraci 100 %
+    writeHash(); render();
   };
   const sc=document.getElementById('sofarClr');
   if(sc) sc.onclick=()=>{ todayReal={d:'',kwh:0}; writeHash(); render(); };
@@ -1361,7 +1388,10 @@ function wire(s){
     const m100=s.pureTotal*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    const mid=(todayReal.d===s.date && todayReal.mm>0 && todayReal.hr>=11.5 && todayReal.hr<=14.5)
+      ? {mm:todayReal.mm, mr:todayReal.kwh} : (prev?{mm:prev.mm,mr:prev.mr}:{});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined)),
+      mm:mid.mm, mr:mid.mr});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
     el.value='';
     ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
@@ -1468,7 +1498,10 @@ function initNow(){
     const m100=s.pureTotal*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    const mid=(todayReal.d===s.date && todayReal.mm>0 && todayReal.hr>=11.5 && todayReal.hr<=14.5)
+      ? {mm:todayReal.mm, mr:todayReal.kwh} : (prev?{mm:prev.mm,mr:prev.mr}:{});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined)),
+      mm:mid.mm, mr:mid.mr});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
     el.value='';
     ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
@@ -1575,7 +1608,10 @@ function initNow(){
     const m100=s.pureTotal*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    const mid=(todayReal.d===s.date && todayReal.mm>0 && todayReal.hr>=11.5 && todayReal.hr<=14.5)
+      ? {mm:todayReal.mm, mr:todayReal.kwh} : (prev?{mm:prev.mm,mr:prev.mr}:{});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined)),
+      mm:mid.mm, mr:mid.mr});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
     el.value='';
     ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
@@ -1682,7 +1718,10 @@ function initNow(){
     const m100=s.pureTotal*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    const mid=(todayReal.d===s.date && todayReal.mm>0 && todayReal.hr>=11.5 && todayReal.hr<=14.5)
+      ? {mm:todayReal.mm, mr:todayReal.kwh} : (prev?{mm:prev.mm,mr:prev.mr}:{});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined)),
+      mm:mid.mm, mr:mid.mr});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
     el.value='';
     ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
@@ -1789,7 +1828,10 @@ function initNow(){
     const m100=s.pureTotal*100/cfg.calib;
     const prev=calLog.find(x=>x.d===s.date);
     calLog=calLog.filter(x=>x.d!==s.date);
-    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined))});
+    const mid=(todayReal.d===s.date && todayReal.mm>0 && todayReal.hr>=11.5 && todayReal.hr<=14.5)
+      ? {mm:todayReal.mm, mr:todayReal.kwh} : (prev?{mm:prev.mm,mr:prev.mr}:{});
+    calLog.push({d:s.date,r:real,m100,c:(cons>0?cons:(prev?prev.c:undefined)),
+      mm:mid.mm, mr:mid.mr});
     calLog.sort((a,b)=>a.d<b.d?-1:1);
     el.value='';
     ['realload','realev'].forEach(k=>{const q=document.getElementById(k); if(q) q.value='';});
