@@ -272,7 +272,7 @@ const DEF = {
   loss:9, inv:10, calib:100, horizonAM:0, horizonPM:0,
   battCap:17.5, battMin:10, battMax:100, battChg:5, battDis:10, battSoc:30, battNow:60, dayFloor:20,
   loadDay:13, loadBase:0.35,
-  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:50, evAmps:6, evEff:90, winFrom:-1, winTo:-1,
+  evCap:77, evSoc:40, evTarget:100, evPhases:3, evFrom:7, evTo:21, reserve:60, evAmps:6, evEff:90, winFrom:-1, winTo:-1,
   tripKm:0, tripArrive:15, tripCons:17, workTarget:80, workSplit:50
 };
 const FIELDS = [
@@ -1259,15 +1259,21 @@ function render(){
   document.getElementById('out').innerHTML=`
     <div class="duo">
       <div class="duo-c">
-        <span class="big">${f1(s.total)}</span><span class="unit">kWh vyrobíš</span>
-        <span class="duo-s">${s.today&&s.h0>0?`ještě dnes ${f1(s.rest)} kWh · `:''}${
-          data.models>1?`modely ${f1(s.totalLo)}–${f1(s.totalHi)}`:''}</span>
+        <span class="big">${f1(s.today?s.rest:s.total)}</span>
+        <span class="unit">kWh ${s.today?'ještě vyrobíš':'vyrobíš'}</span>
+        <span class="duo-s">${(()=>{
+          const kwh=s.today?s.rest:s.total;
+          const pct=kwh/cfg.evCap*100;
+          return `= ${f0(pct)} % baterky auta`
+            + (s.today?` · celý den ${f1(s.total)} kWh`:'')
+            + (data.models>1?` · modely ${f1(s.totalLo)}–${f1(s.totalHi)}`:'');
+        })()}</span>
       </div>
       <div class="duo-c ${W.evDone>0.3?'good':''}">
         <span class="big">${W.evDone>0.3?f1(W.evDone):'0'}</span><span class="unit">kWh do auta</span>
         <span class="duo-s">${!s.canCharge
           ? (s.why==='away'?'auto dnes není doma':s.why==='late-back'?'vrací se v '+hh(s.back):'dnes už je po slunci')
-          : (W.evDone>0.3 ? `${winTxt(s,W)} → auto ${f0(s.evEndPct)} %`
+          : (W.evDone>0.3 ? `= ${f0(W.evDone/cfg.evCap*100)} % baterky · ${winTxt(s,W)} → auto ${f0(s.evEndPct)} %`
              : (s.roomCap<=0.1?'auto je plné':'slunce nestačí'))}</span>
       </div>
     </div>
