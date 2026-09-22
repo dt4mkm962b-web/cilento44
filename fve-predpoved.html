@@ -64,6 +64,12 @@
   .duo-c .unit{font-family:'Barlow Condensed',sans-serif;font-size:14px;color:var(--muted);
     text-transform:uppercase;letter-spacing:.08em;margin-top:1px}
   .duo-s{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.35}
+  .cb-mode{display:flex;gap:0;margin-bottom:10px}
+  .cb-mode .act{margin:0;flex:1;background:#fff;color:var(--muted);border-color:var(--hair);
+    border-radius:0;padding:7px 10px;font-size:12px}
+  .cb-mode .act:first-child{border-radius:2px 0 0 2px}
+  .cb-mode .act:last-child{border-radius:0 2px 2px 0;border-left:none}
+  .cb-mode .act.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
   .cb-bat{margin-left:auto;text-align:right;display:flex;flex-direction:column}
   .cb-bat b{font-family:var(--mono);font-size:17px;font-weight:600;line-height:1.1}
   .cb-bat i{font-style:normal;font-size:10px;color:var(--muted)}
@@ -608,6 +614,7 @@ function simulate(d,st){
   function run(amps,from,to,mid){
     const kW=amps*cfg.evPhases*0.23;
     let soc=startSoc,ev=0,grid=0,exp=0,fullAt=null,socEve=null,end=null,minSoc=startSoc;
+    let dropFrom=null, prevSoc=startSoc;
     let toHouse=0,toCar=0,toBatt=0,carFromBatt=0;
     const out=hours.map(x=>{
       if(x.h<h0) return {...x,evP:0,soc:startSoc,surplus:0,grid:0,past:true};
@@ -626,6 +633,8 @@ function simulate(d,st){
                  e=net-ch; exp+=e; }
       else{ const dis=Math.min(-net,cfg.battDis,Math.max(0,soc-min)); soc-=dis; g=-net-dis; grid+=g; }
       ev+=evP*effEv; if(evP>0) end=x.h+1;
+      if(fullAt!==null && dropFrom===null && x.h>fullAt && soc<prevSoc-0.05) dropFrom=x.h;
+      prevSoc=soc;
       if(x.h<=22) minSoc=Math.min(minSoc,soc);
       if(fullAt===null && soc>=max-0.05 && x.pv>0) fullAt=x.h;
       if(x.h===22) socEve=soc;
@@ -637,7 +646,7 @@ function simulate(d,st){
     out.forEach(x=>{ if(!(x.evP>0.01)) return;
       const last=segs[segs.length-1];
       if(last && last.to===x.h) last.to=x.h+1; else segs.push({from:x.h,to:x.h+1}); });
-    return {hours:out,evDone:ev,segs,grid,exp,fullAt,socEve:se,endBatt:soc,
+    return {hours:out,evDone:ev,segs,grid,exp,fullAt,dropFrom,socEve:se,endBatt:soc,
             toHouse,toCar,toBatt,carFromBatt,socEvePct:se/cfg.battCap*100,
             minSocPct:minSoc/cfg.battCap*100,
             evPct:(evNow+ev)/cfg.evCap*100,start:from,end,kW,amps};
@@ -681,7 +690,8 @@ function simulate(d,st){
   const sel = st.sel===true;                     // den zobrazený v panelu
   const wf = (sel && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
   const wt = (sel && cfg.winTo>0)    ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
-  const win = canCharge && wt>wf ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
+  const noCharge = !!st.noCharge;
+  const win = (!noCharge && canCharge && wt>wf) ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
   win.wf=wf; win.wt=wt;
   // proč není okno delší — vyzkoušej hodinu dřív a hodinu později
   const failWhy=r=>{
@@ -742,7 +752,7 @@ function simulate(d,st){
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
   return {hours:base.hours,loadDay,learned:!!ll,total,pureTotal,totalLo,totalHi,passed,realKwh,dayF,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
-          imported:base.grid,base,opts,rec,manual,use,win,flow,evOpen,room,roomCap,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
+          imported:base.grid,base,opts,rec,manual,use,win,flow,evOpen,room,roomCap,noCharge,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
           date:dateStr,daily:{code:data.daily.weather_code[d],tmax:data.daily.temperature_2m_max[d],
           tmin:data.daily.temperature_2m_min[d],sun:data.daily.sunshine_duration[d]/3600,
           light:data.daily.daylight_duration[d]/3600,
@@ -780,7 +790,7 @@ function week(){
     const evBase=Math.max(0,Math.min(cfg.evCap,evHome));   // z čeho se doma nabíjí
 
     const s=simulate(d,{batt,ev:evBase,h0:(today?nowH:0),startFrac:(today?nowFrac:0),
-      back:dc.back,dep:dc.dep,sel:(d===day)});
+      back:dc.back,dep:dc.dep,noCharge:!!dc.noCharge,sel:(d===day)});
     s.km=dc.km; s.back=dc.back; s.dep=dc.dep; s.driven=driven; s.drive=drive;
     s.workTo=workTo; s.work=work; s.workAdd=workAdd;
     s.atWorkPct=(atWork!==null?atWork:ev)/cfg.evCap*100;
@@ -976,7 +986,7 @@ function weekTable(wk){
              : (s.driven?'ujeto':'bez jízdy'),
       doma
     ].filter(Boolean).join(' · ');
-    const stav = !s.canCharge
+    const stav = s.noCharge ? 'nenabíjíš' : !s.canCharge
       ? (s.why==='away'?'auto pryč':s.why==='late-back'?'vrací se '+hh(s.back):'po slunci')
       : (chg>0.1? s.win.amps+' A '+winTxt(s,s.win)
         : (s.roomCap<=0.1?'auto plné':'nenabíjet'));
@@ -989,6 +999,9 @@ function weekTable(wk){
       <div class="dewhy">
         Výroba ${f1(s.total)} kWh · spotřeba domu ${f1(s.loadDay)} kWh${
         s.win.evDone>0.3?` · nabíjí se ${winTxt(s,s.win)}`:''}
+        ${s.base.fullAt!==null?`<br>Baterie plná v ${hh(s.base.fullAt)}${
+          s.base.dropFrom!==null?`, od ${hh(s.base.dropFrom)} se vybíjí`:''}.`
+          :'<br>Baterie se dnes na 100 % nedostane.'}
         ${s.win.limitAfter?`<br>Déle nabíjet nejde: ${s.win.limitAfter}.`:''}
       </div>
       <div class="derow">
@@ -1271,15 +1284,22 @@ function render(){
       </div>
       <div class="duo-c ${W.evDone>0.3?'good':''}">
         <span class="big">${W.evDone>0.3?f1(W.evDone):'0'}</span><span class="unit">kWh do auta</span>
-        <span class="duo-s">${!s.canCharge
+        <span class="duo-s">${s.noCharge ? 'dnes nenabíjíš' : !s.canCharge
           ? (s.why==='away'?'auto dnes není doma':s.why==='late-back'?'vrací se v '+hh(s.back):'dnes už je po slunci')
           : (W.evDone>0.3 ? `= ${f0(W.evDone/cfg.evCap*100)} % baterky · ${winTxt(s,W)} → auto ${f0(s.evEndPct)} %`
              : (s.roomCap<=0.1?'auto je plné':'slunce nestačí'))}</span>
       </div>
     </div>
 
-    <div class="chargebox${warn?' bad':''}">
-      ${s.canCharge?`<div class="cb-top">
+    <div class="chargebox${warn&&!s.noCharge?' bad':''}">
+      <div class="cb-mode">
+        <button class="act ${s.noCharge?'':'on'}" id="modeOn">Nabíjet</button>
+        <button class="act ${s.noCharge?'on':''}" id="modeOff">Nenabíjet</button>
+      </div>
+      ${s.noCharge?`<div class="cb-top"><span class="cb-off" style="font-size:14px">Auto dnes nenabíjíš —
+        všechen přebytek jde do baterie domu.</span>
+        <div class="cb-bat"><b>${f0(W.socEvePct)} %</b><i>baterie ve 22:00</i></div></div>`
+      : (s.canCharge?`<div class="cb-top">
         <div class="stepper">
           <button id="ampDown">−</button><span id="ampVal">${cfg.evAmps} A</span><button id="ampUp">+</button>
         </div>
@@ -1290,8 +1310,8 @@ function render(){
         </div>
         <div class="cb-bat"><b style="color:${W.tooLow?'var(--surplus)':'var(--ink)'}">${
           f0(W.socEvePct)} %</b><i>baterie ve 22:00</i></div>
-      </div>`:''}
-      ${warn?`<p class="cb-warn"><strong>${warn.t}</strong> ${warn.d}</p>`:''}
+      </div>`:'')}
+      ${warn&&!s.noCharge?`<p class="cb-warn"><strong>${warn.t}</strong> ${warn.d}</p>`:''}
     </div>
 
     <div class="cond">${WX[s.daily.code]||''} · nejsilnější hodina ${hh(s.peak.h)} ~${f1(s.peak.pv)} kW ·
@@ -1351,6 +1371,13 @@ function wire(s){
   };
   const sc=document.getElementById('sofarClr');
   if(sc) sc.onclick=()=>{ todayReal={d:'',kwh:0}; writeHash(); render(); };
+
+  /* --- nabíjet / nenabíjet (pro zobrazený den) --- */
+  const setMode=off=>{ const c=dayCfg(s.date); c.noCharge=off; saveDays();
+    cfg.winFrom=-1; cfg.winTo=-1; writeHash(); render(); };
+  const mOn=document.getElementById('modeOn'), mOff=document.getElementById('modeOff');
+  if(mOn) mOn.onclick=()=>setMode(false);
+  if(mOff) mOff.onclick=()=>setMode(true);
 
   /* --- proud a okno --- */
   const AMPS=[6,8,10,12];
