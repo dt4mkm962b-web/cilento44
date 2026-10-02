@@ -688,8 +688,11 @@ function simulate(d,st){
   const optA = opts.find(o=>o.amps===cfg.evAmps) || rec;
   const autoOk = optA && optA.evDone>0.3;
   const sel = st.sel===true;                     // den zobrazený v panelu
-  const wf = (sel && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
-  const wt = (sel && cfg.winTo>0)    ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
+  let wf = (sel && cfg.winFrom>=0) ? Math.max(cfg.winFrom,evOpen) : (autoOk?optA.start:evOpen);
+  let wt = (sel && cfg.winTo>0)    ? Math.min(cfg.winTo,cfg.evTo) : (autoOk?optA.end:evOpen);
+  // ruční okno, které už proběhlo, posuň — ať nezmizí celé
+  if(sel && cfg.winFrom>=0 && wt<=wf) wt=Math.min(cfg.evTo, wf+1);
+  const winPast = sel && cfg.winFrom>=0 && cfg.winTo>0 && cfg.winTo<=evOpen;
   const noCharge = !!st.noCharge;
   const win = (!noCharge && canCharge && wt>wf) ? run(cfg.evAmps,wf,wt) : run(cfg.evAmps,99,99);
   win.wf=wf; win.wt=wt;
@@ -752,7 +755,7 @@ function simulate(d,st){
   const peak=hours.reduce((m,x)=>x.pv>m.pv?x:m,{pv:0,h:0});
   const above3=hours.filter(x=>x.pv>=3).length;
   return {hours:base.hours,loadDay,learned:!!ll,total,pureTotal,totalLo,totalHi,passed,realKwh,dayF,rest,restLo,restHi,peak,above3,fullAt:base.fullAt,surplus:base.exp,
-          imported:base.grid,base,opts,rec,manual,use,win,flow,evOpen,room,roomCap,noCharge,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
+          imported:base.grid,base,opts,rec,manual,use,win,flow,evOpen,winPast,room,roomCap,noCharge,evNow,today,h0,startFrac,canCharge,back,why,whyLater,startAt,
           date:dateStr,daily:{code:data.daily.weather_code[d],tmax:data.daily.temperature_2m_max[d],
           tmin:data.daily.temperature_2m_min[d],sun:data.daily.sunshine_duration[d]/3600,
           light:data.daily.daylight_duration[d]/3600,
@@ -989,7 +992,7 @@ function weekTable(wk){
     const stav = s.noCharge ? 'nenabíjíš' : !s.canCharge
       ? (s.why==='away'?'auto pryč':s.why==='late-back'?'vrací se '+hh(s.back):'po slunci')
       : (chg>0.1? s.win.amps+' A '+winTxt(s,s.win)
-        : (s.roomCap<=0.1?'auto plné':'nenabíjet'));
+        : (s.roomCap<=0.1?'auto plné':'nic se nenabije'));
 
     const edit = sel ? `<div class="dayedit">
       <div class="derow">
@@ -1261,7 +1264,9 @@ function render(){
     return o; };
   const warn = !s.canCharge ? null
     : (W.evDone<=0.3 ? {t:'V tomhle okně nic nenabiješ.',
-        d:(s.roomCap<=0.1?'Auto je na stropu '+f0(cfg.evTarget)+' %.':'Slunce v té době nestačí.')}
+        d:(s.winPast?'Ta hodina už je za námi — model posunul okno na '+winTxt(s,W)+'.'
+          :(s.roomCap<=0.1?'Auto je na stropu '+f0(cfg.evTarget)+' %.'
+          :'Slunce v té době nestačí a baterie domu by šla pod limit.'))}
     : (W.buysGrid ? {t:`Koupíš ${f1(W.grid-s.base.grid)} kWh ze sítě.`,
         d:'Zkrať okno nebo sniž proud.'}
     : (W.tooLow ? {t:`Baterie domu se do 22:00 nedobije — skončí na ${f0(W.socEvePct)} %.`,
