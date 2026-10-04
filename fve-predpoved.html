@@ -586,7 +586,14 @@ function simulate(d,st){
 
   const pureTotal = hours.reduce((a,x)=>a+x.pv,0);   // čistý odhad modelu, bez průběžného zpřesnění
   const realKwh = (today && todayReal.d===dateStr && todayReal.kwh>0) ? todayReal.kwh : 0;
-  const dayF = (realKwh>0 && passed>2) ? Math.max(0.5,Math.min(2, realKwh/passed)) : 1;
+  // Ranní odchylka má malou vypovídací hodnotu — váží se podílem dne, který už proběhl.
+  // V 10:00 po 2 kWh z 30 je poměr skoro náhodný, odpoledne už je to solidní signál.
+  const dayAll = hours.reduce((a,x)=>a+x.pv,0);
+  const share = dayAll>0 ? passed/dayAll : 0;
+  const dayF = (realKwh>0 && passed>1)
+    ? (()=>{ const raw=realKwh/passed, w=Math.min(1, share*1.5);
+             return Math.max(0.6, Math.min(1.5, 1+(raw-1)*w)); })()
+    : 1;
   if(dayF!==1) hours.forEach(x=>{ if(x.h>=h0){ x.pv*=dayF; x.pvLo*=dayF; x.pvHi*=dayF; } });
 
 
